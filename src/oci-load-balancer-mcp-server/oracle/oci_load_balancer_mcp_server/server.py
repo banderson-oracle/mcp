@@ -6,9 +6,21 @@ https://oss.oracle.com/licenses/upl.
 
 import os
 from logging import Logger
+from typing import Literal, Optional
 
 import oci
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
+from oracle.oci_load_balancer_mcp_server.models import (
+    # Backend,
+    # BackendSet,
+    # Listener,
+    LoadBalancer,
+    # map_backend,
+    # map_backend_set,
+    # map_listener,
+    map_load_balancer,
+)
+from pydantic import Field
 
 from . import __project__, __version__
 
@@ -37,19 +49,80 @@ def get_load_balancer_client():
     return oci.load_balancer.LoadBalancerClient(config, signer=signer)
 
 
+# @mcp.tool(
+#     name="list_load_balancers",
+#     description="Lists the load balancers from the given compartment",
+# )
+# async def list_load_balancers(
+#     query: str,
+# ) -> str:
+#     """Example tool implementation.
+
+
+#     Replace this with your own tool implementation.
+#     """
+#     project_name = "oracle load-balancer MCP Server"
+#     return f"Hello from {project_name}! Your query was {query}. Replace this with your tool's logic"
 @mcp.tool(
     name="list_load_balancers",
     description="Lists the load balancers from the given compartment",
 )
-async def list_load_balancers(
-    query: str,
-) -> str:
-    """Example tool implementation.
+def list_load_balancers(
+    compartment_id: str = Field(..., description="The OCID of the compartment"),
+    limit: Optional[int] = Field(
+        None,
+        description="The maximum amount of load balancers to return. If None, there is no limit.",
+        ge=1,
+    ),
+    lifecycle_state: Optional[
+        Literal[
+            "CREATING",
+            "UPDATING",
+            "ACTIVE",
+            "DELETING",
+            "DELETED",
+            "FAILED",
+        ]
+    ] = Field(
+        None,
+        description="The lifecycle state of the network load balancer to filter on",
+    ),
+) -> list[LoadBalancer]:
+    nlbs: list[LoadBalancer] = []
 
-    Replace this with your own tool implementation.
-    """
-    project_name = "oracle load-balancer MCP Server"
-    return f"Hello from {project_name}! Your query was {query}. Replace this with your tool's logic"
+    try:
+        client = get_load_balancer_client()
+
+        response: oci.response.Response = None
+        has_next_page = True
+        next_page: str = None
+
+        while has_next_page and (limit is None or len(nlbs) < limit):
+            kwargs = {
+                "compartment_id": compartment_id,
+                "page": next_page,
+                "limit": limit,
+            }
+
+            if lifecycle_state is not None:
+                kwargs["lifecycle_state"] = lifecycle_state
+
+            response = client.list_network_load_balancers(**kwargs)
+            has_next_page = response.has_next_page
+            next_page = response.next_page if hasattr(response, "next_page") else None
+
+            data: list[oci.network_load_balancer.models.NetworkLoadBalancer] = (
+                response.data.items
+            )
+            for d in data:
+                nlbs.append(map_network_load_balancer(d))
+
+        logger.info(f"Found {len(nlbs)} Network Load Balancers")
+        return nlbs
+
+    except Exception as e:
+        logger.error(f"Error in list_network_load_balancers tool: {str(e)}")
+        raise e
 
 
 def main():
