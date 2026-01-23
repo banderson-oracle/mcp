@@ -1,5 +1,5 @@
 """
-Copyright (c) 2025, Oracle and/or its affiliates.
+Copyright (c) 2026, Oracle and/or its affiliates.
 Licensed under the Universal Permissive License v1.0 as shown at
 https://oss.oracle.com/licenses/upl.
 """
@@ -7,22 +7,22 @@ https://oss.oracle.com/licenses/upl.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Union
 
 import oci
 from pydantic import BaseModel, Field
 
-# Helper function
+# Utilities
 
 
-def _oci_to_dict(obj):
+def _oci_to_dict(obj: Any) -> Optional[Dict[str, Any]]:
     """Best-effort conversion of OCI SDK model objects to plain dicts."""
     if obj is None:
         return None
     try:
         from oci.util import to_dict as oci_to_dict
 
-        return oci_to_dict(obj)
+        return oci_to_dict(obj)  # handles nested OCI models
     except Exception:
         pass
     if isinstance(obj, dict):
@@ -32,434 +32,595 @@ def _oci_to_dict(obj):
     return None
 
 
-# Sub-objects for LoadBalancer
+# Sub-objects of LoadBalancer (SDK: oci.load_balancer.models)
 
 
 class ReservedIP(BaseModel):
+    """Reserved IP details used by load balancer IP addresses."""
+
     id: Optional[str] = Field(
         None,
-        description="The OCID of the reserved IP (public IP) to associate with the Load Balancer.",
+        description=(
+            "OCID of the Reserved/Public IP created with VCN. When set, the load balancer "
+            "is configured to listen on this IP."
+        ),
     )
 
 
 class IpAddress(BaseModel):
-    ip_address: Optional[str] = Field(None, description="The IP address.")
+    """A load balancer IP address entry."""
+
+    ip_address: Optional[str] = Field(
+        None, description="An IP address. Example: 192.168.0.3"
+    )
     is_public: Optional[bool] = Field(
-        None, description="Whether the IP address is public (True) or private (False)."
+        None,
+        description=(
+            "Whether the IP address is public (internet-routable) or private (VCN-local)."
+        ),
     )
     reserved_ip: Optional[ReservedIP] = Field(
-        None, description="Details of a Reserved IP bound to the load balancer."
+        None, description="Reserved IP metadata if this address is reserved."
     )
 
 
-class HealthChecker(BaseModel):
-    protocol: Optional[Literal["HTTP", "TCP"]] = Field(
-        None, description="The protocol the health check must use."
-    )
-    url_path: Optional[str] = Field(
-        None, description="The path against which to run the health check (HTTP only)."
-    )
-    port: Optional[int] = Field(
-        None,
-        description="The backend server port against which to run the health check. If not set, the backend's port is used.",
-    )
-    return_code: Optional[int] = Field(
-        None, description="The status code a healthy backend server should return."
-    )
-    retries: Optional[int] = Field(
-        None,
-        description="Number of retries before considering a backend unhealthy; also applies when recovering.",
-    )
-    timeout_in_millis: Optional[int] = Field(
-        None, description="Maximum time, in ms, to wait for a reply to a health check."
-    )
-    interval_in_millis: Optional[int] = Field(
-        None, description="Interval between health checks, in ms."
-    )
-    response_body_regex: Optional[str] = Field(
-        None,
-        description="Regex for parsing/validating the response body from the backend (HTTP only).",
-    )
-    is_force_plain_text: Optional[bool] = Field(
-        None,
-        description="If true, health checks are done in plain text even if backend set is using SSL.",
-    )
+class ShapeDetails(BaseModel):
+    """Flexible shape bandwidth configuration for the load balancer."""
 
-
-class Backend(BaseModel):
-    name: Optional[str] = Field(
-        None, description="Read-only identifier of this backend in form ip:port."
-    )
-    ip_address: Optional[str] = Field(
-        None, description="The IP address of the backend server."
-    )
-    port: Optional[int] = Field(
-        None, description="The communication port for the backend server."
-    )
-    weight: Optional[int] = Field(
+    minimum_bandwidth_in_mbps: Optional[int] = Field(
         None,
-        description="Policy weight; higher values receive larger proportion of traffic.",
+        description=(
+            "Guaranteed pre-provisioned bandwidth (ingress + egress), in Mbps."
+        ),
     )
-    max_connections: Optional[int] = Field(
+    maximum_bandwidth_in_mbps: Optional[int] = Field(
         None,
-        description="Max simultaneous connections the load balancer can make to this backend.",
-    )
-    drain: Optional[bool] = Field(
-        None,
-        description="Whether the load balancer should drain this server (no new connections).",
-    )
-    backup: Optional[bool] = Field(
-        None,
-        description="Whether this server should be treated as backup and only used when primaries fail.",
-    )
-    offline: Optional[bool] = Field(
-        None,
-        description="Whether this server is treated as offline (receives no traffic).",
-    )
-
-
-class SessionPersistenceConfigurationDetails(BaseModel):
-    cookie_name: Optional[str] = Field(
-        None,
-        description="Cookie name used to detect a session initiated by the backend server. '*' means any cookie.",
-    )
-    disable_fallback: Optional[bool] = Field(
-        None,
-        description="Prevent directing a persistent session client to a different backend when the original is unavailable.",
-    )
-
-
-class LBCookieSessionPersistenceConfigurationDetails(BaseModel):
-    cookie_name: Optional[str] = Field(
-        None,
-        description="Name of the cookie inserted by the load balancer (defaults to X-Oracle-BMC-LBS-Route).",
-    )
-    disable_fallback: Optional[bool] = Field(
-        None, description="Disable persistence fallback."
-    )
-    domain: Optional[str] = Field(None, description="Cookie domain.")
-    path: Optional[str] = Field(None, description="Cookie path.")
-    max_age_in_seconds: Optional[int] = Field(
-        None, description="Cookie max-age attribute in seconds."
-    )
-    is_secure: Optional[bool] = Field(
-        None, description="Whether the cookie should have the Secure attribute."
-    )
-    is_http_only: Optional[bool] = Field(
-        None, description="Whether the cookie should have the HttpOnly attribute."
-    )
-
-
-class SSLConfiguration(BaseModel):
-    protocols: Optional[List[str]] = Field(
-        None,
-        description="List of supported SSL/TLS protocols for HTTPS/SSL connections.",
-    )
-    cipher_suite_name: Optional[str] = Field(
-        None, description="Name of the cipher suite to use for HTTPS/SSL connections."
-    )
-    server_order_preference: Optional[Literal["ENABLED", "DISABLED"]] = Field(
-        None, description="Preference for server ciphers over client ciphers."
-    )
-    certificate_name: Optional[str] = Field(
-        None, description="Friendly name of the certificate bundle to use."
-    )
-    certificate_ids: Optional[List[str]] = Field(
-        None, description="OCI Certificates service certificate OCIDs."
-    )
-    trusted_certificate_authority_ids: Optional[List[str]] = Field(
-        None,
-        description="OCI Certificates service CA/Bundle OCIDs that the load balancer should trust.",
-    )
-    has_session_resumption: Optional[bool] = Field(
-        None,
-        description="Whether to resume encrypted sessions using cached parameters.",
-    )
-    verify_peer_certificate: Optional[bool] = Field(
-        None, description="Whether peer certificates should be verified."
-    )
-    verify_depth: Optional[int] = Field(
-        None, description="Maximum depth for peer certificate chain verification."
+        description=(
+            "Maximum bandwidth (ingress + egress) that can be achieved, in Mbps."
+        ),
     )
 
 
 class ConnectionConfiguration(BaseModel):
+    """Connection settings between client and backend servers."""
+
     idle_timeout: Optional[int] = Field(
         None,
-        description="Maximum idle time (in seconds) between successive operations.",
+        description=(
+            "Maximum idle time in seconds allowed between successive send/receive operations."
+        ),
     )
     backend_tcp_proxy_protocol_version: Optional[int] = Field(
         None, description="Backend TCP Proxy Protocol version (1 or 2)."
     )
-    backend_tcp_proxy_protocol_options: Optional[List[str]] = Field(
-        None,
-        description="TCP PPv2 options enabled on TCP listeners (e.g., PP2_TYPE_AUTHORITY).",
-    )
+    backend_tcp_proxy_protocol_options: Optional[
+        List[Literal["PP2_TYPE_AUTHORITY"]]
+    ] = Field(None, description="PPv2 options that can be enabled on TCP listeners.")
 
 
-class BackendSet(BaseModel):
-    name: Optional[str] = Field(None, description="Backend set friendly name.")
-    policy: Optional[str] = Field(
-        None,
-        description="Load balancer policy for the backend set (e.g., LEAST_CONNECTIONS).",
+class SSLConfiguration(BaseModel):
+    """SSL/TLS negotiation settings for listeners and backend sets."""
+
+    verify_depth: Optional[int] = Field(
+        None, description="Maximum depth for peer certificate chain verification."
     )
-    backends: Optional[List[Backend]] = Field(None, description="List of backends.")
-    backend_max_connections: Optional[int] = Field(
+    verify_peer_certificate: Optional[bool] = Field(
+        None, description="Whether peer certificates should be verified."
+    )
+    has_session_resumption: Optional[bool] = Field(
         None,
         description=(
-            "Max simultaneous connections the load balancer can make to any backend in this set "
-            "unless the backend overrides with its own maxConnections."
+            "Whether to resume TLS sessions to improve performance (lower security)."
         ),
     )
-    health_checker: Optional[HealthChecker] = Field(
-        None, description="Health check policy configuration."
+    trusted_certificate_authority_ids: Optional[List[str]] = Field(
+        None,
+        description="OCI Certificates CA/Bundle OCIDs the load balancer should trust.",
     )
-    ssl_configuration: Optional[SSLConfiguration] = Field(
-        None, description="Backend set SSL handling configuration."
-    )
-    session_persistence_configuration: Optional[
-        SessionPersistenceConfigurationDetails
-    ] = Field(
+    certificate_ids: Optional[List[str]] = Field(
         None,
         description=(
-            "Application cookie stickiness configuration. Mutually exclusive with LB cookie stickiness."
+            "OCI Certificates certificate OCIDs (currently a single ID supported)."
         ),
     )
-    lb_cookie_session_persistence_configuration: Optional[
-        LBCookieSessionPersistenceConfigurationDetails
-    ] = Field(
+    certificate_name: Optional[str] = Field(
+        None,
+        description="Friendly name of the certificate bundle bound to this config.",
+    )
+    server_order_preference: Optional[
+        Literal["ENABLED", "DISABLED", "UNKNOWN_ENUM_VALUE"]
+    ] = Field(  # noqa: E501
+        None, description="Prefer server ciphers over client ciphers when enabled."
+    )
+    cipher_suite_name: Optional[str] = Field(
+        None, description="The cipher suite name for HTTPS/SSL connections."
+    )
+    protocols: Optional[List[str]] = Field(
         None,
         description=(
-            "LB cookie stickiness configuration. Mutually exclusive with application cookie stickiness."
+            "Supported SSL protocols for HTTPS/SSL connections (e.g., TLSv1.2, TLSv1.3)."
         ),
     )
 
 
 class Hostname(BaseModel):
-    name: Optional[str] = Field(None, description="Hostname resource name.")
-    hostname: Optional[str] = Field(None, description="Virtual hostname.")
+    """A hostname resource associated with a load balancer for one or more listeners."""
+
+    name: Optional[str] = Field(
+        None, description="Unique, friendly hostname resource name."
+    )
+    hostname: Optional[str] = Field(
+        None, description="Virtual hostname (e.g., app.example.com)."
+    )
 
 
 class SSLCipherSuite(BaseModel):
-    name: Optional[str] = Field(None, description="Cipher suite name.")
+    """A named set of SSL ciphers used for HTTPS/SSL connections."""
+
+    name: Optional[str] = Field(
+        None, description="Friendly name of the SSL cipher suite."
+    )
     ciphers: Optional[List[str]] = Field(
-        None, description="List of ciphers enabled in the suite."
+        None, description="List of SSL cipher names in the suite."
     )
 
 
 class Certificate(BaseModel):
+    """Certificate bundle configuration (public and CA certificates)."""
+
     certificate_name: Optional[str] = Field(
-        None, description="Certificate bundle friendly name."
+        None, description="Friendly name of the certificate bundle."
     )
     public_certificate: Optional[str] = Field(
         None, description="Public certificate in PEM format."
     )
     ca_certificate: Optional[str] = Field(
-        None, description="CA certificate or bundle in PEM format."
+        None, description="CA or intermediate certificate in PEM format."
     )
+
+
+class Backend(BaseModel):
+    """Backend server configuration within a backend set."""
+
+    name: Optional[str] = Field(
+        None,
+        description=(
+            "Read-only composite key of backend (IP:port) within the backend set."
+        ),
+    )
+    ip_address: Optional[str] = Field(None, description="Backend server IP address.")
+    port: Optional[int] = Field(
+        None, description="Communication port for the backend server."
+    )
+    weight: Optional[int] = Field(
+        None,
+        description=(
+            "Load balancing weight; higher values receive more new connections."
+        ),
+    )
+    max_connections: Optional[int] = Field(
+        None,
+        description=(
+            "Maximum simultaneous connections allowed to this backend (unlimited if unset)."
+        ),
+    )
+    drain: Optional[bool] = Field(
+        None, description="Whether the backend is in drain mode (no new connections)."
+    )
+    backup: Optional[bool] = Field(
+        None,
+        description=(
+            "Treat server as backup; receives traffic only if primary backends are unhealthy."
+        ),
+    )
+    offline: Optional[bool] = Field(
+        None, description="Whether the backend is offline (no incoming traffic)."
+    )
+
+
+class HealthChecker(BaseModel):
+    """Health check policy configuration for backends."""
+
+    protocol: Optional[str] = Field(
+        None, description="Protocol to use for health checks (HTTP or TCP)."
+    )
+    url_path: Optional[str] = Field(
+        None, description="Path for HTTP health checks (e.g., /healthcheck)."
+    )
+    port: Optional[int] = Field(
+        None,
+        description=(
+            "Backend port to use for the health check; falls back to Backend.port if unset."
+        ),
+    )
+    return_code: Optional[int] = Field(
+        None, description="Expected status code from a healthy backend."
+    )
+    retries: Optional[int] = Field(
+        None,
+        description=(
+            "Number of retries before marking backend unhealthy or when recovering to healthy."
+        ),
+    )
+    timeout_in_millis: Optional[int] = Field(
+        None, description="Maximum wait time for a health check reply (ms)."
+    )
+    interval_in_millis: Optional[int] = Field(
+        None, description="Interval between health checks (ms)."
+    )
+    response_body_regex: Optional[str] = Field(
+        None, description="Regex to match against response body for health checks."
+    )
+    is_force_plain_text: Optional[bool] = Field(
+        None,
+        description=(
+            "Force plaintext health check even if backend set uses SSL; otherwise follow SSL config."
+        ),
+    )
+
+
+class SessionPersistenceConfigurationDetails(BaseModel):
+    """Application cookie based session persistence configuration."""
+
+    cookie_name: Optional[str] = Field(
+        None,
+        description="Cookie name to detect a session initiated by the backend server.",
+    )
+    disable_fallback: Optional[bool] = Field(
+        None,
+        description=(
+            "Prevent directing persistent-session clients to another backend if original is unavailable."
+        ),
+    )
+
+
+class LBCookieSessionPersistenceConfigurationDetails(BaseModel):
+    """LB cookie based session persistence configuration (stickiness)."""
+
+    cookie_name: Optional[str] = Field(
+        None, description="Name of cookie inserted by the load balancer."
+    )
+    disable_fallback: Optional[bool] = Field(
+        None,
+        description="Prevent fallback to a different backend if original is unavailable.",
+    )
+    domain: Optional[str] = Field(None, description="Cookie domain attribute value.")
+    path: Optional[str] = Field(None, description="Cookie path attribute value.")
+    max_age_in_seconds: Optional[int] = Field(
+        None, description="Cookie Max-Age attribute (seconds)."
+    )
+    is_secure: Optional[bool] = Field(
+        None, description="Whether to set the Secure attribute on the cookie."
+    )
+    is_http_only: Optional[bool] = Field(
+        None, description="Whether to set the HttpOnly attribute on the cookie."
+    )
+
+
+class BackendSet(BaseModel):
+    """Configuration of a load balancer backend set."""
+
+    name: Optional[str] = Field(None, description="Friendly, unique backend set name.")
+    policy: Optional[str] = Field(
+        None, description="Load balancer policy (e.g., LEAST_CONNECTIONS)."
+    )
+    backends: Optional[List[Backend]] = Field(
+        None, description="Backends in this backend set."
+    )
+    backend_max_connections: Optional[int] = Field(
+        None,
+        description=(
+            "Max simultaneous connections to any backend unless overridden at backend level."
+        ),
+    )
+    health_checker: Optional[HealthChecker] = Field(
+        None, description="Health check policy for this backend set."
+    )
+    ssl_configuration: Optional[SSLConfiguration] = Field(
+        None, description="SSL configuration for this backend set."
+    )
+    session_persistence_configuration: Optional[
+        SessionPersistenceConfigurationDetails
+    ] = Field(None, description="Application cookie stickiness configuration.")
+    lb_cookie_session_persistence_configuration: Optional[
+        LBCookieSessionPersistenceConfigurationDetails
+    ] = Field(None, description="LB cookie stickiness configuration.")
 
 
 class PathMatchType(BaseModel):
+    """The type of matching to apply to incoming URIs for path routes."""
+
     match_type: Optional[
         Literal[
-            "EXACT_MATCH", "FORCE_LONGEST_PREFIX_MATCH", "PREFIX_MATCH", "SUFFIX_MATCH"
+            "EXACT_MATCH",
+            "FORCE_LONGEST_PREFIX_MATCH",
+            "PREFIX_MATCH",
+            "SUFFIX_MATCH",
+            "UNKNOWN_ENUM_VALUE",
         ]
-    ] = Field(None, description="Type of matching to apply to incoming URIs.")
+    ] = Field(None, description="How to compare the path against the incoming URI.")
 
 
 class PathRoute(BaseModel):
-    path: Optional[str] = Field(None, description="The path string to match.")
+    """A path route rule mapping request path to a backend set."""
+
+    path: Optional[str] = Field(
+        None,
+        description=(
+            "Path string to match against the incoming URI path (case-insensitive, no wildcards or regex)."
+        ),
+    )
     path_match_type: Optional[PathMatchType] = Field(
-        None, description="Path matching configuration."
+        None, description="The type of path matching to apply."
     )
     backend_set_name: Optional[str] = Field(
-        None, description="Target backend set when the path matches."
+        None,
+        description=(
+            "Target backend set name for requests that match the specified path."
+        ),
     )
 
 
 class PathRouteSet(BaseModel):
-    name: Optional[str] = Field(None, description="Path route set name.")
+    """A named set of path route rules for a listener (deprecated in favor of routing policies)."""
+
+    name: Optional[str] = Field(
+        None, description="Unique name for this set of path route rules."
+    )
     path_routes: Optional[List[PathRoute]] = Field(
-        None, description="Set of path route rules."
+        None, description="Path route rules."
     )
 
 
-class ShapeDetails(BaseModel):
-    minimum_bandwidth_in_mbps: Optional[int] = Field(
-        None, description="Minimum pre-provisioned bandwidth in Mbps."
+# Routing policy (listener-level advanced request routing)
+
+
+class ForwardToBackendSet(BaseModel):
+    """Routing action to forward requests to a backend set."""
+
+    name: Literal["FORWARD_TO_BACKENDSET"] = Field(
+        "FORWARD_TO_BACKENDSET", description="Routing action discriminator."
     )
-    maximum_bandwidth_in_mbps: Optional[int] = Field(
-        None, description="Maximum bandwidth in Mbps."
+    backend_set_name: Optional[str] = Field(
+        None, description="Name of the backend set to forward traffic to."
     )
 
 
 class Action(BaseModel):
-    name: Optional[Literal["FORWARD_TO_BACKENDSET"]] = Field(
-        None, description="Action name (currently only FORWARD_TO_BACKENDSET)."
+    """Generic routing action. Unknown action payload is preserved in details."""
+
+    name: Optional[str] = Field(
+        None, description="Routing action discriminator (e.g., FORWARD_TO_BACKENDSET)."
     )
-    backend_set_name: Optional[str] = Field(
-        None, description="Name of the backend set to forward to."
+    details: Optional[Dict[str, Any]] = Field(
+        None, description="Raw action fields when not mapped to a typed model."
     )
+
+
+RoutingAction = Union[ForwardToBackendSet, Action]
 
 
 class RoutingRule(BaseModel):
-    name: Optional[str] = Field(None, description="Routing rule name.")
-    condition: Optional[str] = Field(
-        None, description="Routing condition written in the configured language."
+    """A routing rule evaluating condition expression and applying actions."""
+
+    name: Optional[str] = Field(
+        None, description="Unique name for the routing policy rule."
     )
-    actions: Optional[List[Action]] = Field(
-        None, description="Actions to apply when the condition evaluates true."
+    condition: Optional[str] = Field(
+        None,
+        description=(
+            "Condition expression evaluated against the incoming HTTP request."
+        ),
+    )
+    actions: Optional[List[RoutingAction]] = Field(
+        None, description="Actions applied when the condition evaluates to true."
     )
 
 
 class RoutingPolicy(BaseModel):
-    name: Optional[str] = Field(None, description="Routing policy name.")
-    condition_language_version: Optional[str] = Field(
-        None, description="Version of the condition language (e.g., V1)."
+    """Named ordered list of routing rules applied to a listener."""
+
+    name: Optional[str] = Field(
+        None, description="Unique name for this list of routing rules."
+    )
+    condition_language_version: Optional[Literal["V1", "UNKNOWN_ENUM_VALUE"]] = Field(
+        None, description="Version of the routing condition language."
     )
     rules: Optional[List[RoutingRule]] = Field(
         None, description="Ordered list of routing rules."
     )
 
 
-class RuleSet(BaseModel):
-    name: Optional[str] = Field(None, description="Rule set name.")
-    # Represent rules as unstructured dicts for flexibility (many variants)
-    items: Optional[List[Dict[str, Any]]] = Field(
-        None, description="List of rules composing the rule set."
+# Listener and rule sets
+
+
+class Listener(BaseModel):
+    """Listener configuration."""
+
+    name: Optional[str] = Field(None, description="Friendly, unique listener name.")
+    default_backend_set_name: Optional[str] = Field(
+        None, description="Name of the associated backend set."
     )
+    port: Optional[int] = Field(
+        None, description="Communication port for the listener."
+    )
+    protocol: Optional[str] = Field(
+        None,
+        description=(
+            "Protocol on which the listener accepts connections (HTTP, HTTP2, TCP, GRPC)."
+        ),
+    )
+    hostname_names: Optional[List[str]] = Field(
+        None, description="Associated hostname resource names."
+    )
+    path_route_set_name: Optional[str] = Field(
+        None,
+        description="Deprecated. Name of the PathRouteSet applied to this listener.",
+    )
+    ssl_configuration: Optional[SSLConfiguration] = Field(
+        None, description="SSL configuration of the listener."
+    )
+    connection_configuration: Optional[ConnectionConfiguration] = Field(
+        None, description="Connection configuration between client and backends."
+    )
+    rule_set_names: Optional[List[str]] = Field(
+        None, description="Names of RuleSets applied to this listener."
+    )
+    routing_policy_name: Optional[str] = Field(
+        None, description="Name of the RoutingPolicy applied to this listener."
+    )
+
+
+class SimpleRule(BaseModel):
+    """Generic listener Rule (for RuleSet). Preserves action and raw fields."""
+
+    action: Optional[str] = Field(
+        None, description="Rule action (e.g., ADD_HTTP_REQUEST_HEADER, REDIRECT, etc.)."
+    )
+    fields: Optional[Dict[str, Any]] = Field(
+        None, description="Other rule fields serialized from the SDK model."
+    )
+
+
+class RuleSet(BaseModel):
+    """A named set of listener rules (header manipulation, access control, etc.)."""
+
+    name: Optional[str] = Field(None, description="Unique name for this set of rules.")
+    items: Optional[List[SimpleRule]] = Field(
+        None, description="Rules composed in this rule set."
+    )
+
+
+# Top-level LoadBalancer
 
 
 class LoadBalancer(BaseModel):
-    id: Optional[str] = Field(None, description="The OCID of the load balancer.")
+    """
+    Pydantic representation of oci.load_balancer.models.LoadBalancer and sub-objects.
+    """
+
+    id: Optional[str] = Field(None, description="OCID of the load balancer.")
     compartment_id: Optional[str] = Field(
-        None, description="The OCID of the compartment containing the load balancer."
+        None, description="OCID of the compartment containing the load balancer."
     )
     display_name: Optional[str] = Field(
-        None, description="A user-friendly display name for the load balancer."
+        None, description="User-friendly name; does not need to be unique."
     )
     lifecycle_state: Optional[
-        Literal["CREATING", "FAILED", "ACTIVE", "DELETING", "DELETED"]
-    ] = Field(None, description="The current lifecycle state of the load balancer.")
+        Literal[
+            "CREATING",
+            "FAILED",
+            "ACTIVE",
+            "DELETING",
+            "DELETED",
+            "UNKNOWN_ENUM_VALUE",
+        ]
+    ] = Field(None, description="Current lifecycle state of the load balancer.")
     time_created: Optional[datetime] = Field(
-        None, description="The time the load balancer was created (RFC3339)."
+        None, description="RFC3339 timestamp when the load balancer was created."
     )
 
     ip_addresses: Optional[List[IpAddress]] = Field(
-        None, description="Array of IP addresses."
+        None, description="Array of IP addresses assigned to the load balancer."
     )
+
     shape_name: Optional[str] = Field(
-        None, description="Shape name determining the pre-provisioned bandwidth."
+        None,
+        description=(
+            "Shape template determining total pre-provisioned bandwidth (ingress + egress)."
+        ),
     )
     shape_details: Optional[ShapeDetails] = Field(
         None, description="Flexible shape bandwidth configuration."
     )
+
     is_private: Optional[bool] = Field(
         None,
-        description="Whether the load balancer has a VCN-local (private) IP address.",
+        description=(
+            "Whether the load balancer is assigned a VCN-local (private) IP address."
+        ),
     )
     is_delete_protection_enabled: Optional[bool] = Field(
         None, description="Whether delete protection is enabled."
     )
     is_request_id_enabled: Optional[bool] = Field(
-        None, description="Whether Request Id feature for HTTP listeners is enabled."
+        None,
+        description=(
+            "Whether to inject a unique request id header for HTTP listeners and echo on responses."
+        ),
     )
     request_id_header: Optional[str] = Field(
-        None, description="Header name used for Request Id if enabled."
-    )
-    ip_mode: Optional[Literal["IPV4", "IPV6"]] = Field(
-        None, description="Whether the load balancer has an IPv4 or IPv6 address."
+        None,
+        description=(
+            "Header name used for the unique request id when Request Id feature is enabled."
+        ),
     )
 
-    subnet_ids: Optional[List[str]] = Field(
-        None, description="List of subnet OCIDs associated with the load balancer."
-    )
+    subnet_ids: Optional[List[str]] = Field(None, description="Array of subnet OCIDs.")
     network_security_group_ids: Optional[List[str]] = Field(
-        None, description="List of NSG OCIDs associated with the load balancer."
+        None, description="Array of NSG OCIDs associated with this load balancer."
     )
 
-    listeners: Optional[Dict[str, "Listener"]] = Field(
-        None, description="Listeners associated with the load balancer."
+    listeners: Optional[Dict[str, Listener]] = Field(
+        None, description="Listeners keyed by name."
     )
     hostnames: Optional[Dict[str, Hostname]] = Field(
-        None, description="Hostnames associated with the load balancer."
-    )
-    backend_sets: Optional[Dict[str, BackendSet]] = Field(
-        None, description="Backend sets associated with the load balancer."
-    )
-    path_route_sets: Optional[Dict[str, PathRouteSet]] = Field(
-        None, description="Path route sets associated with the load balancer."
-    )
-    certificates: Optional[Dict[str, Certificate]] = Field(
-        None, description="Certificates associated with the load balancer."
+        None, description="Hostnames keyed by name."
     )
     ssl_cipher_suites: Optional[Dict[str, SSLCipherSuite]] = Field(
-        None, description="SSL cipher suites associated with the load balancer."
+        None, description="SSL cipher suites keyed by name."
     )
-
-    rule_sets: Optional[Dict[str, RuleSet]] = Field(
-        None, description="Rule sets associated with the load balancer."
+    certificates: Optional[Dict[str, Certificate]] = Field(
+        None, description="Certificate bundles keyed by name."
     )
-    routing_policies: Optional[Dict[str, RoutingPolicy]] = Field(
-        None, description="Routing policies associated with the load balancer."
+    backend_sets: Optional[Dict[str, BackendSet]] = Field(
+        None, description="Backend sets keyed by name."
+    )
+    path_route_sets: Optional[Dict[str, PathRouteSet]] = Field(
+        None, description="Path route sets keyed by name (deprecated)."
     )
 
     freeform_tags: Optional[Dict[str, str]] = Field(
         None, description="Free-form tags for this resource."
     )
     defined_tags: Optional[Dict[str, Dict[str, Any]]] = Field(
-        None, description="Defined tags for this resource."
+        None, description="Defined tags for this resource (scoped to namespaces)."
     )
     security_attributes: Optional[Dict[str, Dict[str, Any]]] = Field(
-        None, description="Extended defined tags for ZPR (if present)."
+        None,
+        description=(
+            "Extended defined tags for ZPR for this resource (scoped to namespaces)."
+        ),
     )
     system_tags: Optional[Dict[str, Dict[str, Any]]] = Field(
-        None, description="System tags for this resource."
-    )
-
-
-class Listener(BaseModel):
-    name: Optional[str] = Field(None, description="Listener friendly name.")
-    default_backend_set_name: Optional[str] = Field(
-        None, description="Name of the associated backend set."
-    )
-    port: Optional[int] = Field(None, description="Listener port.")
-    protocol: Optional[str] = Field(
         None,
-        description="Protocol on which the listener accepts connections (HTTP, HTTP2, TCP, GRPC).",
+        description=(
+            "System tags (scoped to namespaces), visible to users but only created by the system."
+        ),
     )
-    hostname_names: Optional[List[str]] = Field(
-        None, description="Array of hostname resource names."
+
+    rule_sets: Optional[Dict[str, RuleSet]] = Field(
+        None, description="Rule sets keyed by name."
     )
-    path_route_set_name: Optional[str] = Field(
-        None,
-        description="Deprecated: name of the path route set applied to this listener.",
+    routing_policies: Optional[Dict[str, RoutingPolicy]] = Field(
+        None, description="Routing policies keyed by name."
     )
-    ssl_configuration: Optional[SSLConfiguration] = Field(
-        None, description="SSL handling configuration for the listener."
-    )
-    connection_configuration: Optional[ConnectionConfiguration] = Field(
-        None, description="Client-backend connection configuration."
-    )
-    rule_set_names: Optional[List[str]] = Field(
-        None, description="Names of rule sets applied to the listener."
-    )
-    routing_policy_name: Optional[str] = Field(
-        None,
-        description="Name of the routing policy applied to this listener's traffic.",
+
+    ip_mode: Optional[Literal["IPV4", "IPV6", "UNKNOWN_ENUM_VALUE"]] = Field(
+        None, description="Whether the load balancer has an IPv4 or IPv6 IP address."
     )
 
 
-# Mapping functions
+# Mapping functions from OCI SDK -> Pydantic models
 
 
-def map_reserved_ip(obj) -> ReservedIP | None:
+def map_reserved_ip(obj) -> Optional[ReservedIP]:
     if not obj:
         return None
     return ReservedIP(id=getattr(obj, "id", None))
 
 
-def map_ip_address(obj) -> IpAddress | None:
+def map_ip_address(obj) -> Optional[IpAddress]:
     if not obj:
         return None
     return IpAddress(
@@ -469,7 +630,89 @@ def map_ip_address(obj) -> IpAddress | None:
     )
 
 
-def map_health_checker(obj) -> HealthChecker | None:
+def map_shape_details(obj) -> Optional[ShapeDetails]:
+    if not obj:
+        return None
+    return ShapeDetails(
+        minimum_bandwidth_in_mbps=getattr(obj, "minimum_bandwidth_in_mbps", None),
+        maximum_bandwidth_in_mbps=getattr(obj, "maximum_bandwidth_in_mbps", None),
+    )
+
+
+def map_connection_configuration(obj) -> Optional[ConnectionConfiguration]:
+    if not obj:
+        return None
+    return ConnectionConfiguration(
+        idle_timeout=getattr(obj, "idle_timeout", None),
+        backend_tcp_proxy_protocol_version=getattr(
+            obj, "backend_tcp_proxy_protocol_version", None
+        ),
+        backend_tcp_proxy_protocol_options=getattr(
+            obj, "backend_tcp_proxy_protocol_options", None
+        ),
+    )
+
+
+def map_ssl_configuration(obj) -> Optional[SSLConfiguration]:
+    if not obj:
+        return None
+    return SSLConfiguration(
+        verify_depth=getattr(obj, "verify_depth", None),
+        verify_peer_certificate=getattr(obj, "verify_peer_certificate", None),
+        has_session_resumption=getattr(obj, "has_session_resumption", None),
+        trusted_certificate_authority_ids=getattr(
+            obj, "trusted_certificate_authority_ids", None
+        ),
+        certificate_ids=getattr(obj, "certificate_ids", None),
+        certificate_name=getattr(obj, "certificate_name", None),
+        server_order_preference=getattr(obj, "server_order_preference", None),
+        cipher_suite_name=getattr(obj, "cipher_suite_name", None),
+        protocols=getattr(obj, "protocols", None),
+    )
+
+
+def map_hostname(obj) -> Optional[Hostname]:
+    if not obj:
+        return None
+    return Hostname(
+        name=getattr(obj, "name", None), hostname=getattr(obj, "hostname", None)
+    )
+
+
+def map_ssl_cipher_suite(obj) -> Optional[SSLCipherSuite]:
+    if not obj:
+        return None
+    return SSLCipherSuite(
+        name=getattr(obj, "name", None), ciphers=getattr(obj, "ciphers", None)
+    )
+
+
+def map_certificate(obj) -> Optional[Certificate]:
+    if not obj:
+        return None
+    return Certificate(
+        certificate_name=getattr(obj, "certificate_name", None),
+        public_certificate=getattr(obj, "public_certificate", None),
+        ca_certificate=getattr(obj, "ca_certificate", None),
+    )
+
+
+def map_backend(obj) -> Optional[Backend]:
+    if not obj:
+        return None
+    return Backend(
+        name=getattr(obj, "name", None),
+        ip_address=getattr(obj, "ip_address", None),
+        port=getattr(obj, "port", None),
+        weight=getattr(obj, "weight", None),
+        max_connections=getattr(obj, "max_connections", None),
+        drain=getattr(obj, "drain", None),
+        backup=getattr(obj, "backup", None),
+        offline=getattr(obj, "offline", None),
+    )
+
+
+def map_health_checker(obj) -> Optional[HealthChecker]:
     if not obj:
         return None
     return HealthChecker(
@@ -485,24 +728,9 @@ def map_health_checker(obj) -> HealthChecker | None:
     )
 
 
-def map_backend(obj) -> Backend | None:
-    if not obj:
-        return None
-    return Backend(
-        name=getattr(obj, "name", None),
-        ip_address=getattr(obj, "ip_address", None),
-        port=getattr(obj, "port", None),
-        weight=getattr(obj, "weight", None),
-        max_connections=getattr(obj, "max_connections", None),
-        drain=getattr(obj, "drain", None),
-        backup=getattr(obj, "backup", None),
-        offline=getattr(obj, "offline", None),
-    )
-
-
-def map_session_persistence_configuration(
+def map_session_persistence_configuration_details(
     obj,
-) -> SessionPersistenceConfigurationDetails | None:
+) -> Optional[SessionPersistenceConfigurationDetails]:
     if not obj:
         return None
     return SessionPersistenceConfigurationDetails(
@@ -511,9 +739,9 @@ def map_session_persistence_configuration(
     )
 
 
-def map_lb_cookie_session_persistence_configuration(
+def map_lb_cookie_session_persistence_configuration_details(
     obj,
-) -> LBCookieSessionPersistenceConfigurationDetails | None:
+) -> Optional[LBCookieSessionPersistenceConfigurationDetails]:
     if not obj:
         return None
     return LBCookieSessionPersistenceConfigurationDetails(
@@ -527,39 +755,7 @@ def map_lb_cookie_session_persistence_configuration(
     )
 
 
-def map_ssl_configuration(obj) -> SSLConfiguration | None:
-    if not obj:
-        return None
-    return SSLConfiguration(
-        protocols=getattr(obj, "protocols", None),
-        cipher_suite_name=getattr(obj, "cipher_suite_name", None),
-        server_order_preference=getattr(obj, "server_order_preference", None),
-        certificate_name=getattr(obj, "certificate_name", None),
-        certificate_ids=getattr(obj, "certificate_ids", None),
-        trusted_certificate_authority_ids=getattr(
-            obj, "trusted_certificate_authority_ids", None
-        ),
-        has_session_resumption=getattr(obj, "has_session_resumption", None),
-        verify_peer_certificate=getattr(obj, "verify_peer_certificate", None),
-        verify_depth=getattr(obj, "verify_depth", None),
-    )
-
-
-def map_connection_configuration(obj) -> ConnectionConfiguration | None:
-    if not obj:
-        return None
-    return ConnectionConfiguration(
-        idle_timeout=getattr(obj, "idle_timeout", None),
-        backend_tcp_proxy_protocol_version=getattr(
-            obj, "backend_tcp_proxy_protocol_version", None
-        ),
-        backend_tcp_proxy_protocol_options=getattr(
-            obj, "backend_tcp_proxy_protocol_options", None
-        ),
-    )
-
-
-def map_backend_set(obj) -> BackendSet | None:
+def map_backend_set(obj) -> Optional[BackendSet]:
     if not obj:
         return None
     backends = (
@@ -576,50 +772,22 @@ def map_backend_set(obj) -> BackendSet | None:
         ssl_configuration=map_ssl_configuration(
             getattr(obj, "ssl_configuration", None)
         ),
-        session_persistence_configuration=map_session_persistence_configuration(
+        session_persistence_configuration=map_session_persistence_configuration_details(
             getattr(obj, "session_persistence_configuration", None)
         ),
-        lb_cookie_session_persistence_configuration=map_lb_cookie_session_persistence_configuration(
+        lb_cookie_session_persistence_configuration=map_lb_cookie_session_persistence_configuration_details(
             getattr(obj, "lb_cookie_session_persistence_configuration", None)
         ),
     )
 
 
-def map_hostname(obj) -> Hostname | None:
-    if not obj:
-        return None
-    return Hostname(
-        name=getattr(obj, "name", None),
-        hostname=getattr(obj, "hostname", None),
-    )
-
-
-def map_ssl_cipher_suite(obj) -> SSLCipherSuite | None:
-    if not obj:
-        return None
-    return SSLCipherSuite(
-        name=getattr(obj, "name", None),
-        ciphers=getattr(obj, "ciphers", None),
-    )
-
-
-def map_certificate(obj) -> Certificate | None:
-    if not obj:
-        return None
-    return Certificate(
-        certificate_name=getattr(obj, "certificate_name", None),
-        public_certificate=getattr(obj, "public_certificate", None),
-        ca_certificate=getattr(obj, "ca_certificate", None),
-    )
-
-
-def map_path_match_type(obj) -> PathMatchType | None:
+def map_path_match_type(obj) -> Optional[PathMatchType]:
     if not obj:
         return None
     return PathMatchType(match_type=getattr(obj, "match_type", None))
 
 
-def map_path_route(obj) -> PathRoute | None:
+def map_path_route(obj) -> Optional[PathRoute]:
     if not obj:
         return None
     return PathRoute(
@@ -629,36 +797,33 @@ def map_path_route(obj) -> PathRoute | None:
     )
 
 
-def map_path_route_set(obj) -> PathRouteSet | None:
+def map_path_route_set(obj) -> Optional[PathRouteSet]:
     if not obj:
         return None
     routes = (
-        [map_path_route(r) for r in getattr(obj, "path_routes", [])]
+        [map_path_route(x) for x in getattr(obj, "path_routes", [])]
         if getattr(obj, "path_routes", None)
         else None
     )
     return PathRouteSet(name=getattr(obj, "name", None), path_routes=routes)
 
 
-def map_shape_details(obj) -> ShapeDetails | None:
+def map_action(obj) -> RoutingAction:
     if not obj:
-        return None
-    return ShapeDetails(
-        minimum_bandwidth_in_mbps=getattr(obj, "minimum_bandwidth_in_mbps", None),
-        maximum_bandwidth_in_mbps=getattr(obj, "maximum_bandwidth_in_mbps", None),
-    )
+        return Action(name=None, details=None)
+    name = getattr(obj, "name", None) or getattr(obj, "action", None)
+    if name == "FORWARD_TO_BACKENDSET":
+        return ForwardToBackendSet(
+            backend_set_name=getattr(obj, "backend_set_name", None)
+        )
+    # Fallback: preserve raw fields
+    data = _oci_to_dict(obj) or {}
+    data.pop("name", None)
+    data.pop("action", None)
+    return Action(name=name, details=data or None)
 
 
-def map_action(obj) -> Action | None:
-    if not obj:
-        return None
-    return Action(
-        name=getattr(obj, "name", None),
-        backend_set_name=getattr(obj, "backend_set_name", None),
-    )
-
-
-def map_routing_rule(obj) -> RoutingRule | None:
+def map_routing_rule(obj) -> Optional[RoutingRule]:
     if not obj:
         return None
     actions = (
@@ -673,7 +838,7 @@ def map_routing_rule(obj) -> RoutingRule | None:
     )
 
 
-def map_routing_policy(obj) -> RoutingPolicy | None:
+def map_routing_policy(obj) -> Optional[RoutingPolicy]:
     if not obj:
         return None
     rules = (
@@ -688,20 +853,7 @@ def map_routing_policy(obj) -> RoutingPolicy | None:
     )
 
 
-def map_rule_set(obj) -> RuleSet | None:
-    if not obj:
-        return None
-    # Keep items as loose dicts to accommodate all rule variants
-    items = getattr(obj, "items", None)
-    try:
-        if items is not None:
-            items = [_oci_to_dict(i) for i in items]
-    except Exception:
-        items = None
-    return RuleSet(name=getattr(obj, "name", None), items=items)
-
-
-def map_listener(obj) -> Listener | None:
+def map_listener(obj) -> Optional[Listener]:
     if not obj:
         return None
     return Listener(
@@ -722,14 +874,34 @@ def map_listener(obj) -> Listener | None:
     )
 
 
+def map_simple_rule(obj) -> Optional[SimpleRule]:
+    if not obj:
+        return None
+    action = getattr(obj, "action", None)
+    raw = _oci_to_dict(obj) or {}
+    if "action" in raw:
+        raw.pop("action", None)
+    return SimpleRule(action=action, fields=raw or None)
+
+
+def map_rule_set(obj) -> Optional[RuleSet]:
+    if not obj:
+        return None
+    items = (
+        [map_simple_rule(x) for x in getattr(obj, "items", [])]
+        if getattr(obj, "items", None)
+        else None
+    )
+    return RuleSet(name=getattr(obj, "name", None), items=items)
+
+
 def map_load_balancer(obj: oci.load_balancer.models.LoadBalancer) -> LoadBalancer:
-    """Map OCI LoadBalancer to custom Pydantic model."""
+    """Map OCI LoadBalancer SDK model (and nested types) to Pydantic model."""
     ip_addresses = (
         [map_ip_address(ip) for ip in getattr(obj, "ip_addresses", [])]
         if getattr(obj, "ip_addresses", None)
         else None
     )
-
     listeners = (
         {k: map_listener(v) for k, v in getattr(obj, "listeners", {}).items()}
         if getattr(obj, "listeners", None)
@@ -738,6 +910,19 @@ def map_load_balancer(obj: oci.load_balancer.models.LoadBalancer) -> LoadBalance
     hostnames = (
         {k: map_hostname(v) for k, v in getattr(obj, "hostnames", {}).items()}
         if getattr(obj, "hostnames", None)
+        else None
+    )
+    ssl_cipher_suites = (
+        {
+            k: map_ssl_cipher_suite(v)
+            for k, v in getattr(obj, "ssl_cipher_suites", {}).items()
+        }
+        if getattr(obj, "ssl_cipher_suites", None)
+        else None
+    )
+    certificates = (
+        {k: map_certificate(v) for k, v in getattr(obj, "certificates", {}).items()}
+        if getattr(obj, "certificates", None)
         else None
     )
     backend_sets = (
@@ -753,19 +938,6 @@ def map_load_balancer(obj: oci.load_balancer.models.LoadBalancer) -> LoadBalance
         if getattr(obj, "path_route_sets", None)
         else None
     )
-    certificates = (
-        {k: map_certificate(v) for k, v in getattr(obj, "certificates", {}).items()}
-        if getattr(obj, "certificates", None)
-        else None
-    )
-    ssl_cipher_suites = (
-        {
-            k: map_ssl_cipher_suite(v)
-            for k, v in getattr(obj, "ssl_cipher_suites", {}).items()
-        }
-        if getattr(obj, "ssl_cipher_suites", None)
-        else None
-    )
     rule_sets = (
         {k: map_rule_set(v) for k, v in getattr(obj, "rule_sets", {}).items()}
         if getattr(obj, "rule_sets", None)
@@ -779,6 +951,7 @@ def map_load_balancer(obj: oci.load_balancer.models.LoadBalancer) -> LoadBalance
         if getattr(obj, "routing_policies", None)
         else None
     )
+
     return LoadBalancer(
         id=getattr(obj, "id", None),
         compartment_id=getattr(obj, "compartment_id", None),
@@ -792,20 +965,19 @@ def map_load_balancer(obj: oci.load_balancer.models.LoadBalancer) -> LoadBalance
         is_delete_protection_enabled=getattr(obj, "is_delete_protection_enabled", None),
         is_request_id_enabled=getattr(obj, "is_request_id_enabled", None),
         request_id_header=getattr(obj, "request_id_header", None),
-        ip_mode=getattr(obj, "ip_mode", None),
         subnet_ids=getattr(obj, "subnet_ids", None),
         network_security_group_ids=getattr(obj, "network_security_group_ids", None),
         listeners=listeners,
         hostnames=hostnames,
+        ssl_cipher_suites=ssl_cipher_suites,
+        certificates=certificates,
         backend_sets=backend_sets,
         path_route_sets=path_route_sets,
-        certificates=certificates,
-        ssl_cipher_suites=ssl_cipher_suites,
-        rule_sets=rule_sets,
-        routing_policies=routing_policies,
         freeform_tags=getattr(obj, "freeform_tags", None),
         defined_tags=getattr(obj, "defined_tags", None),
         security_attributes=getattr(obj, "security_attributes", None),
-        defined_tags_extended=getattr(obj, "defined_tags_extended", None),
         system_tags=getattr(obj, "system_tags", None),
+        rule_sets=rule_sets,
+        routing_policies=routing_policies,
+        ip_mode=getattr(obj, "ip_mode", None),
     )
