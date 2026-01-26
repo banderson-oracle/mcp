@@ -18,7 +18,6 @@ from oracle.oci_load_balancer_mcp_server.models import (
     BackendSet,
     BackendSetHealth,
     Certificate,
-    CidrBlock,
     Hostname,
     Listener,
     LoadBalancer,
@@ -34,7 +33,6 @@ from oracle.oci_load_balancer_mcp_server.models import (
     map_backend_set,
     map_backend_set_health,
     map_certificate,
-    map_cidr_block,
     map_hostname,
     map_listener,
     map_load_balancer,
@@ -118,33 +116,26 @@ def list_load_balancers(
     try:
         client = get_load_balancer_client()
 
-        response: oci.response.Response = None
-        has_next_page = True
-        next_page: str = None
-
-        while has_next_page and (limit is None or len(lbs) < limit):
-            kwargs = {
-                "compartment_id": compartment_id,
-                "page": next_page,
-                "limit": limit,
-            }
-
-            if lifecycle_state is not None:
-                kwargs["lifecycle_state"] = lifecycle_state
-            if display_name is not None:
-                kwargs["display_name"] = display_name
-            if sort_by is not None:
-                kwargs["sort_by"] = sort_by
-            if sort_order is not None:
-                kwargs["sort_order"] = sort_order
-
-            response = client.list_load_balancers(**kwargs)
-            has_next_page = getattr(response, "has_next_page", False)
-            next_page = response.next_page if hasattr(response, "next_page") else None
-
-        items = getattr(response.data, "items", response.data)
-        for d in items:
-            lbs.append(map_load_balancer(d))
+        response = None
+        next_page: Optional[str] = None
+        while True:
+            response = client.list_load_balancers(
+                compartment_id,
+                limit=limit,
+                page=next_page,
+                display_name=display_name,
+                lifecycle_state=lifecycle_state,
+                sort_by=sort_by,
+                sort_order=sort_order,
+            )
+            items = getattr(response.data, "items", response.data) or []
+            for d in items:
+                lbs.append(map_load_balancer(d))
+                if limit is not None and len(lbs) >= limit:
+                    break
+            next_page = getattr(response, "next_page", None)
+            if not next_page or (limit is not None and len(lbs) >= limit):
+                break
 
         logger.info(f"Found {len(lbs)} Load Balancers")
         return lbs
@@ -337,13 +328,13 @@ def update_load_balancer_shape(
                 maximum_bandwidth_in_mbps=maximum_bandwidth_in_mbps,
             )
 
-        update_details = oci.load_balancer.models.UpdateLoadBalancerDetails(
+        update_details = oci.load_balancer.models.UpdateLoadBalancerShapeDetails(
             shape_name=shape_name,
             shape_details=shape_details,
         )
 
-        response: oci.response.Response = client.update_load_balancer(
-            update_details, load_balancer_id
+        response: oci.response.Response = client.update_load_balancer_shape(
+            load_balancer_id, update_details
         )
         logger.info("Update Load Balancer shape request accepted")
         return map_response(response)
@@ -386,11 +377,11 @@ def update_load_balancer_network_security_groups(
     try:
         client = get_load_balancer_client()
 
-        update_details = oci.load_balancer.models.UpdateLoadBalancerDetails(
+        update_details = oci.load_balancer.models.UpdateNetworkSecurityGroupsDetails(
             network_security_group_ids=network_security_group_ids,
         )
 
-        response: oci.response.Response = client.update_load_balancer(
+        response: oci.response.Response = client.update_network_security_groups(
             update_details, load_balancer_id
         )
         logger.info("Update Load Balancer network security groups request accepted")
@@ -759,22 +750,12 @@ def list_load_balancer_backend_sets(
     try:
         client = get_load_balancer_client()
         backend_sets: list[BackendSet] = []
-        response: oci.response.Response = None
-        has_next_page = True
-        next_page: str | None = None
-        while has_next_page and (limit is None or len(backend_sets) < limit):
-            response = client.list_backend_sets(
-                load_balancer_id=load_balancer_id,
-                page=next_page,
-                limit=limit,
-            )
-            has_next_page = getattr(response, "has_next_page", False)
-            next_page = response.next_page if hasattr(response, "next_page") else None
-            items = getattr(response.data, "items", response.data) or []
-            for d in items:
-                backend_sets.append(map_backend_set(d))
-                if limit is not None and len(backend_sets) >= limit:
-                    break
+        response: oci.response.Response = client.list_backend_sets(load_balancer_id)
+        items = getattr(response.data, "items", response.data) or []
+        for d in items:
+            backend_sets.append(map_backend_set(d))
+            if limit is not None and len(backend_sets) >= limit:
+                break
         logger.info(f"Found {len(backend_sets)} Backend Sets")
         return backend_sets
     except Exception as e:
@@ -818,21 +799,12 @@ def create_load_balancer_backend_set(
         description="A friendly, unique backend set name",
     ),
     policy: str = Field(..., description="Load balancer policy for this backend set"),
-    backends: Optional[list[Backend]] = Field(
-        None, description="Backends to include in the backend set"
-    ),
-    backend_max_connections: Optional[int] = Field(
-        None,
-        description=(
-            "Max simultaneous connections to any backend unless overridden at backend level"
-        ),
-        ge=256,
-        le=65535,
-    ),
-    # Health checker
+    # Health checker (required argument must come before any optional args)
     health_checker_protocol: str = Field(
         ..., description="Protocol used for health checks (HTTP or TCP)"
     ),
+    # Optional collections and tuning
+    # Health checker (optional fields)
     health_checker_url_path: Optional[str] = Field(
         None, description="Path for HTTP health checks"
     ),
@@ -865,6 +837,17 @@ def create_load_balancer_backend_set(
         description=(
             "Force plaintext health checks regardless of backend set SSL configuration"
         ),
+    ),
+    backends: Optional[list[Backend]] = Field(
+        None, description="Backends to include in the backend set"
+    ),
+    backend_max_connections: Optional[int] = Field(
+        None,
+        description=(
+            "Max simultaneous connections to any backend unless overridden at backend level"
+        ),
+        ge=256,
+        le=65535,
     ),
     # SSL configuration
     ssl_protocols: Optional[list[str]] = Field(
@@ -1304,7 +1287,7 @@ def update_load_balancer_backend_set(
         )
 
         response: oci.response.Response = client.update_backend_set(
-            load_balancer_id, name, details
+            details, load_balancer_id, name
         )
         logger.info("Update Backend Set request accepted")
         return map_response(response)
@@ -1355,23 +1338,14 @@ def list_backends(
     try:
         client = get_load_balancer_client()
         backends: list[Backend] = []
-        response: oci.response.Response = None
-        has_next_page = True
-        next_page: str | None = None
-        while has_next_page and (limit is None or len(backends) < limit):
-            response = client.list_backends(
-                load_balancer_id=load_balancer_id,
-                backend_set_name=backend_set_name,
-                page=next_page,
-                limit=limit,
-            )
-            has_next_page = getattr(response, "has_next_page", False)
-            next_page = response.next_page if hasattr(response, "next_page") else None
-            items = getattr(response.data, "items", response.data) or []
-            for d in items:
-                backends.append(map_backend(d))
-                if limit is not None and len(backends) >= limit:
-                    break
+        response: oci.response.Response = client.list_backends(
+            load_balancer_id, backend_set_name
+        )
+        items = getattr(response.data, "items", response.data) or []
+        for d in items:
+            backends.append(map_backend(d))
+            if limit is not None and len(backends) >= limit:
+                break
         logger.info(f"Found {len(backends)} Backends")
         return backends
     except Exception as e:
@@ -1404,7 +1378,7 @@ def create_backend(
 ) -> Response:
     try:
         client = get_load_balancer_client()
-        details = oci.load_balancer.models.BackendDetails(
+        details = oci.load_balancer.models.CreateBackendDetails(
             ip_address=ip_address,
             port=port,
             weight=weight,
@@ -1476,8 +1450,6 @@ def update_backend(
     try:
         client = get_load_balancer_client()
         details = oci.load_balancer.models.UpdateBackendDetails(
-            ip_address=ip_address,
-            port=port,
             weight=weight,
             max_connections=max_connections,
             backup=backup,
@@ -1485,7 +1457,7 @@ def update_backend(
             offline=offline,
         )
         response: oci.response.Response = client.update_backend(
-            load_balancer_id, backend_set_name, backend_name, details
+            details, load_balancer_id, backend_set_name, backend_name
         )
         logger.info("Update Backend request accepted")
         return map_response(response)
@@ -1530,22 +1502,12 @@ def list_load_balancer_certificates(
     try:
         client = get_load_balancer_client()
         certificates: list[Certificate] = []
-        response: oci.response.Response = None
-        has_next_page = True
-        next_page: str | None = None
-        while has_next_page and (limit is None or len(certificates) < limit):
-            response = client.list_certificates(
-                load_balancer_id=load_balancer_id,
-                page=next_page,
-                limit=limit,
-            )
-            has_next_page = getattr(response, "has_next_page", False)
-            next_page = response.next_page if hasattr(response, "next_page") else None
-            items = getattr(response.data, "items", response.data) or []
-            for d in items:
-                certificates.append(map_certificate(d))
-                if limit is not None and len(certificates) >= limit:
-                    break
+        response: oci.response.Response = client.list_certificates(load_balancer_id)
+        items = getattr(response.data, "items", response.data) or []
+        for d in items:
+            certificates.append(map_certificate(d))
+            if limit is not None and len(certificates) >= limit:
+                break
         logger.info(f"Found {len(certificates)} Certificates")
         return certificates
     except Exception as e:
@@ -1562,19 +1524,19 @@ def create_load_balancer_certificate(
     certificate_name: str = Field(
         ..., description="A friendly name for the certificate"
     ),
+    public_certificate: str = Field(..., description="Public certificate PEM contents"),
+    private_key: str = Field(..., description="Private key PEM contents"),
     ca_certificate: Optional[str] = Field(
         None,
         description="CA certificate PEM contents (optional if using certificate bundle)",
     ),
-    public_certificate: str = Field(..., description="Public certificate PEM contents"),
-    private_key: str = Field(..., description="Private key PEM contents"),
     passphrase: Optional[str] = Field(
         None, description="Passphrase for the private key if encrypted"
     ),
 ) -> Response:
     try:
         client = get_load_balancer_client()
-        details = oci.load_balancer.models.CertificateDetails(
+        details = oci.load_balancer.models.CreateCertificateDetails(
             certificate_name=certificate_name,
             ca_certificate=ca_certificate,
             public_certificate=public_certificate,
@@ -1582,7 +1544,7 @@ def create_load_balancer_certificate(
             passphrase=passphrase,
         )
         response: oci.response.Response = client.create_certificate(
-            load_balancer_id, details
+            details, load_balancer_id
         )
         logger.info("Create Certificate request accepted")
         return map_response(response)
@@ -1631,22 +1593,14 @@ def list_ssl_cipher_suites(
     try:
         client = get_load_balancer_client()
         cipher_suites: list[SSLCipherSuite] = []
-        response: oci.response.Response = None
-        has_next_page = True
-        next_page: str | None = None
-        while has_next_page and (limit is None or len(cipher_suites) < limit):
-            response = client.list_ssl_cipher_suites(
-                load_balancer_id=load_balancer_id,
-                page=next_page,
-                limit=limit,
-            )
-            has_next_page = getattr(response, "has_next_page", False)
-            next_page = response.next_page if hasattr(response, "next_page") else None
-            items = getattr(response.data, "items", response.data) or []
-            for d in items:
-                cipher_suites.append(map_ssl_cipher_suite(d))
-                if limit is not None and len(cipher_suites) >= limit:
-                    break
+        response: oci.response.Response = client.list_ssl_cipher_suites(
+            load_balancer_id
+        )
+        items = getattr(response.data, "items", response.data) or []
+        for d in items:
+            cipher_suites.append(map_ssl_cipher_suite(d))
+            if limit is not None and len(cipher_suites) >= limit:
+                break
         logger.info(f"Found {len(cipher_suites)} SSL Cipher Suites")
         return cipher_suites
     except Exception as e:
@@ -1665,12 +1619,12 @@ def create_ssl_cipher_suite(
 ) -> Response:
     try:
         client = get_load_balancer_client()
-        details = oci.load_balancer.models.SSLCipherSuiteDetails(
+        details = oci.load_balancer.models.CreateSSLCipherSuiteDetails(
             name=name,
             ciphers=ciphers,
         )
         response: oci.response.Response = client.create_ssl_cipher_suite(
-            load_balancer_id, details
+            details, load_balancer_id
         )
         logger.info("Create SSL Cipher Suite request accepted")
         return map_response(response)
@@ -1713,7 +1667,7 @@ def update_ssl_cipher_suite(
 ) -> Response:
     try:
         client = get_load_balancer_client()
-        details = oci.load_balancer.models.SSLCipherSuiteDetails(
+        details = oci.load_balancer.models.UpdateSSLCipherSuiteDetails(
             ciphers=ciphers,
         )
         response: oci.response.Response = client.update_ssl_cipher_suite(
@@ -1768,25 +1722,12 @@ def list_hostnames(
     try:
         client = get_load_balancer_client()
         hostnames: list[Hostname] = []
-        response: oci.response.Response = None
-        has_next_page = True
-        next_page: str | None = None
-
-        while has_next_page and (limit is None or len(hostnames) < limit):
-            kwargs = {
-                "load_balancer_id": load_balancer_id,
-                "page": next_page,
-                "limit": limit,
-            }
-            response = client.list_hostnames(**kwargs)
-            has_next_page = getattr(response, "has_next_page", False)
-            next_page = response.next_page if hasattr(response, "next_page") else None
-            items = getattr(response.data, "items", response.data) or []
-            for d in items:
-                hostnames.append(map_hostname(d))
-                if limit is not None and len(hostnames) >= limit:
-                    break
-
+        response: oci.response.Response = client.list_hostnames(load_balancer_id)
+        items = getattr(response.data, "items", response.data) or []
+        for d in items:
+            hostnames.append(map_hostname(d))
+            if limit is not None and len(hostnames) >= limit:
+                break
         logger.info(f"Found {len(hostnames)} Hostnames")
         return hostnames
     except Exception as e:
@@ -1900,24 +1841,12 @@ def list_rule_sets(
     try:
         client = get_load_balancer_client()
         rule_sets: list[RuleSet] = []
-        response: oci.response.Response = None
-        has_next_page = True
-        next_page: str | None = None
-
-        while has_next_page and (limit is None or len(rule_sets) < limit):
-            kwargs = {
-                "load_balancer_id": load_balancer_id,
-                "page": next_page,
-                "limit": limit,
-            }
-            response = client.list_rule_sets(**kwargs)
-            has_next_page = getattr(response, "has_next_page", False)
-            next_page = response.next_page if hasattr(response, "next_page") else None
-            items = getattr(response.data, "items", response.data) or []
-            for d in items:
-                rule_sets.append(map_rule_set(d))
-                if limit is not None and len(rule_sets) >= limit:
-                    break
+        response: oci.response.Response = client.list_rule_sets(load_balancer_id)
+        items = getattr(response.data, "items", response.data) or []
+        for d in items:
+            rule_sets.append(map_rule_set(d))
+            if limit is not None and len(rule_sets) >= limit:
+                break
 
         logger.info(f"Found {len(rule_sets)} Rule Sets")
         return rule_sets
@@ -1945,7 +1874,7 @@ def create_rule_set(
             items=items,
         )
         response: oci.response.Response = client.create_rule_set(
-            details, load_balancer_id
+            load_balancer_id, details
         )
         logger.info("Create Rule Set request accepted")
         return map_response(response)
@@ -1991,7 +1920,7 @@ def update_rule_set(
             items=items,
         )
         response: oci.response.Response = client.update_rule_set(
-            details, load_balancer_id, name
+            load_balancer_id, name, details
         )
         logger.info("Update Rule Set request accepted")
         return map_response(response)
@@ -2037,23 +1966,20 @@ def list_routing_policies(
         client = get_load_balancer_client()
         policies: list[RoutingPolicy] = []
         response: oci.response.Response = None
-        has_next_page = True
-        next_page: str | None = None
+        next_page: Optional[str] = None
 
-        while has_next_page and (limit is None or len(policies) < limit):
-            kwargs = {
-                "load_balancer_id": load_balancer_id,
-                "page": next_page,
-                "limit": limit,
-            }
-            response = client.list_routing_policies(**kwargs)
-            has_next_page = getattr(response, "has_next_page", False)
-            next_page = response.next_page if hasattr(response, "next_page") else None
+        while True:
+            response = client.list_routing_policies(
+                load_balancer_id, limit=limit, page=next_page
+            )
             items = getattr(response.data, "items", response.data) or []
             for d in items:
                 policies.append(map_routing_policy(d))
                 if limit is not None and len(policies) >= limit:
                     break
+            next_page = getattr(response, "next_page", None)
+            if not next_page or (limit is not None and len(policies) >= limit):
+                break
 
         logger.info(f"Found {len(policies)} Routing Policies")
         return policies
@@ -2242,24 +2168,19 @@ def list_load_balancer_healths(
     health_summaries: list[LoadBalancerHealthSummary] = []
     try:
         client = get_load_balancer_client()
-        has_next_page = True
-        next_page: str | None = None
-        while has_next_page and (limit is None or len(health_summaries) < limit):
-            kwargs = {
-                "compartment_id": compartment_id,
-                "page": next_page,
-                "limit": limit,
-            }
+        next_page: Optional[str] = None
+        while True:
             response: oci.response.Response = client.list_load_balancer_healths(
-                **kwargs
+                compartment_id, limit=limit, page=next_page
             )
-            has_next_page = getattr(response, "has_next_page", False)
-            next_page = response.next_page if hasattr(response, "next_page") else None
             items = getattr(response.data, "items", response.data) or []
             for d in items:
                 health_summaries.append(map_load_balancer_health_summary(d))
                 if limit is not None and len(health_summaries) >= limit:
                     break
+            next_page = getattr(response, "next_page", None)
+            if not next_page or (limit is not None and len(health_summaries) >= limit):
+                break
         logger.info(f"Found {len(health_summaries)} Load Balancer health summaries")
         return health_summaries
     except Exception as e:
@@ -2269,10 +2190,10 @@ def list_load_balancer_healths(
 
 @mcp.tool(
     name="list_load_balancer_work_requests",
-    description="List work requests for load balancers in a compartment",
+    description="List work requests for a given load balancer",
 )
 def list_load_balancer_work_requests(
-    compartment_id: str = Field(..., description="The OCID of the compartment"),
+    load_balancer_id: str = Field(..., description="The OCID of the load balancer"),
     limit: Optional[int] = Field(
         None,
         description="Maximum number of work requests to return. If None, no limit.",
@@ -2282,22 +2203,19 @@ def list_load_balancer_work_requests(
     work_requests: list[WorkRequest] = []
     try:
         client = get_load_balancer_client()
-        has_next_page = True
-        next_page: str | None = None
-        while has_next_page and (limit is None or len(work_requests) < limit):
-            kwargs = {
-                "compartment_id": compartment_id,
-                "page": next_page,
-                "limit": limit,
-            }
-            response: oci.response.Response = client.list_work_requests(**kwargs)
-            has_next_page = getattr(response, "has_next_page", False)
-            next_page = response.next_page if hasattr(response, "next_page") else None
+        next_page: Optional[str] = None
+        while True:
+            response: oci.response.Response = client.list_work_requests(
+                load_balancer_id, limit=limit, page=next_page
+            )
             items = getattr(response.data, "items", response.data) or []
             for d in items:
                 work_requests.append(map_work_request(d))
                 if limit is not None and len(work_requests) >= limit:
                     break
+            next_page = getattr(response, "next_page", None)
+            if not next_page or (limit is not None and len(work_requests) >= limit):
+                break
         logger.info(f"Found {len(work_requests)} Load Balancer work requests")
         return work_requests
     except Exception as e:
