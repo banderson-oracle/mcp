@@ -154,6 +154,17 @@ class Hostname(BaseModel):
     )
 
 
+class CidrBlock(BaseModel):
+    """CIDR block resource associated with a load balancer."""
+
+    name: Optional[str] = Field(
+        None, description="Unique, friendly CIDR block resource name."
+    )
+    cidr_block: Optional[str] = Field(
+        None, description="CIDR notation string (e.g., 10.0.0.0/24)."
+    )
+
+
 class SSLCipherSuite(BaseModel):
     """A named set of SSL ciphers used for HTTPS/SSL connections."""
 
@@ -547,6 +558,14 @@ def _map_response_data(data: Any) -> Any:
             return map_certificate(data)  # type: ignore[name-defined]
         if isinstance(data, oci.load_balancer.models.SSLCipherSuite):
             return map_ssl_cipher_suite(data)  # type: ignore[name-defined]
+        if isinstance(data, oci.load_balancer.models.CidrBlock):
+            return map_cidr_block(data)  # type: ignore[name-defined]
+        if isinstance(data, oci.load_balancer.models.Hostname):
+            return map_hostname(data)  # type: ignore[name-defined]
+        if isinstance(data, oci.load_balancer.models.RuleSet):
+            return map_rule_set(data)  # type: ignore[name-defined]
+        if isinstance(data, oci.load_balancer.models.RoutingPolicy):
+            return map_routing_policy(data)  # type: ignore[name-defined]
         if isinstance(data, oci.load_balancer.models.LoadBalancerHealth):
             return map_load_balancer_health(data)  # type: ignore[name-defined]
         if isinstance(data, oci.load_balancer.models.BackendSetHealth):
@@ -780,6 +799,14 @@ def map_hostname(obj) -> Optional[Hostname]:
         return None
     return Hostname(
         name=getattr(obj, "name", None), hostname=getattr(obj, "hostname", None)
+    )
+
+
+def map_cidr_block(obj) -> Optional[CidrBlock]:
+    if not obj:
+        return None
+    return CidrBlock(
+        name=getattr(obj, "name", None), cidr_block=getattr(obj, "cidr_block", None)
     )
 
 

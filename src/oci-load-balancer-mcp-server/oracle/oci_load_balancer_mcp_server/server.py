@@ -4,6 +4,8 @@ Licensed under the Universal Permissive License v1.0 as shown at
 https://oss.oracle.com/licenses/upl.
 """
 
+from __future__ import annotations
+
 import os
 from logging import Logger
 from typing import Literal, Optional
@@ -12,14 +14,37 @@ import oci
 from fastmcp import FastMCP
 from oracle.oci_load_balancer_mcp_server.models import (
     Backend,
+    BackendHealth,
     BackendSet,
+    BackendSetHealth,
+    Certificate,
+    CidrBlock,
+    Hostname,
     Listener,
     LoadBalancer,
+    LoadBalancerHealth,
+    LoadBalancerHealthSummary,
     Response,
+    RoutingPolicy,
+    RuleSet,
+    SSLCipherSuite,
+    WorkRequest,
+    map_backend,
+    map_backend_health,
     map_backend_set,
+    map_backend_set_health,
+    map_certificate,
+    map_cidr_block,
+    map_hostname,
     map_listener,
     map_load_balancer,
+    map_load_balancer_health,
+    map_load_balancer_health_summary,
     map_response,
+    map_routing_policy,
+    map_rule_set,
+    map_ssl_cipher_suite,
+    map_work_request,
 )
 from pydantic import Field
 
@@ -117,9 +142,9 @@ def list_load_balancers(
             has_next_page = getattr(response, "has_next_page", False)
             next_page = response.next_page if hasattr(response, "next_page") else None
 
-            items = getattr(response.data, "items", response.data)
-            for d in items:
-                lbs.append(map_load_balancer(d))
+        items = getattr(response.data, "items", response.data)
+        for d in items:
+            lbs.append(map_load_balancer(d))
 
         logger.info(f"Found {len(lbs)} Load Balancers")
         return lbs
@@ -278,6 +303,56 @@ def update_load_balancer(
         raise e
 
 
+@mcp.tool(
+    name="update_load_balancer_shape",
+    description="Update the shape (bandwidth) of a load balancer",
+)
+def update_load_balancer_shape(
+    load_balancer_id: str = Field(
+        ..., description="The OCID of the load balancer to update"
+    ),
+    shape_name: Optional[str] = Field(
+        None,
+        description="The shape name for the load balancer (e.g., Flexible, 100Mbps)",
+    ),
+    minimum_bandwidth_in_mbps: Optional[int] = Field(
+        None,
+        description="Minimum bandwidth in Mbps (Flexible shape only)",
+    ),
+    maximum_bandwidth_in_mbps: Optional[int] = Field(
+        None,
+        description="Maximum bandwidth in Mbps (Flexible shape only)",
+    ),
+) -> Response:
+    try:
+        client = get_load_balancer_client()
+
+        shape_details = None
+        if (
+            minimum_bandwidth_in_mbps is not None
+            and maximum_bandwidth_in_mbps is not None
+        ):
+            shape_details = oci.load_balancer.models.ShapeDetails(
+                minimum_bandwidth_in_mbps=minimum_bandwidth_in_mbps,
+                maximum_bandwidth_in_mbps=maximum_bandwidth_in_mbps,
+            )
+
+        update_details = oci.load_balancer.models.UpdateLoadBalancerDetails(
+            shape_name=shape_name,
+            shape_details=shape_details,
+        )
+
+        response: oci.response.Response = client.update_load_balancer(
+            update_details, load_balancer_id
+        )
+        logger.info("Update Load Balancer shape request accepted")
+        return map_response(response)
+
+    except Exception as e:
+        logger.error(f"Error in update_load_balancer_shape tool: {str(e)}")
+        raise e
+
+
 @mcp.tool(name="delete_load_balancer", description="Delete a load balancer")
 def delete_load_balancer(
     load_balancer_id: str = Field(
@@ -293,6 +368,38 @@ def delete_load_balancer(
 
     except Exception as e:
         logger.error(f"Error in delete_load_balancer tool: {str(e)}")
+        raise e
+
+
+@mcp.tool(
+    name="update_load_balancer_network_security_groups",
+    description="Update the network security groups associated with a load balancer",
+)
+def update_load_balancer_network_security_groups(
+    load_balancer_id: str = Field(
+        ..., description="The OCID of the load balancer to update"
+    ),
+    network_security_group_ids: Optional[list[str]] = Field(
+        None, description="Array of NSG OCIDs to associate with the load balancer"
+    ),
+) -> Response:
+    try:
+        client = get_load_balancer_client()
+
+        update_details = oci.load_balancer.models.UpdateLoadBalancerDetails(
+            network_security_group_ids=network_security_group_ids,
+        )
+
+        response: oci.response.Response = client.update_load_balancer(
+            update_details, load_balancer_id
+        )
+        logger.info("Update Load Balancer network security groups request accepted")
+        return map_response(response)
+
+    except Exception as e:
+        logger.error(
+            f"Error in update_load_balancer_network_security_groups tool: {str(e)}"
+        )
         raise e
 
 
@@ -1229,6 +1336,990 @@ def delete_load_balancer_backend_set(
         return map_response(response)
     except Exception as e:
         logger.error(f"Error in delete_load_balancer_backend_set tool: {str(e)}")
+        raise e
+
+
+@mcp.tool(
+    name="list_backends",
+    description="Lists the backends from the given backend set and load balancer",
+)
+def list_backends(
+    load_balancer_id: str = Field(..., description="The OCID of the load balancer"),
+    backend_set_name: str = Field(..., description="The name of the backend set"),
+    limit: Optional[int] = Field(
+        None,
+        description="The maximum number of backends to return. If None, all are returned.",
+        ge=1,
+    ),
+) -> list[Backend]:
+    try:
+        client = get_load_balancer_client()
+        backends: list[Backend] = []
+        response: oci.response.Response = None
+        has_next_page = True
+        next_page: str | None = None
+        while has_next_page and (limit is None or len(backends) < limit):
+            response = client.list_backends(
+                load_balancer_id=load_balancer_id,
+                backend_set_name=backend_set_name,
+                page=next_page,
+                limit=limit,
+            )
+            has_next_page = getattr(response, "has_next_page", False)
+            next_page = response.next_page if hasattr(response, "next_page") else None
+            items = getattr(response.data, "items", response.data) or []
+            for d in items:
+                backends.append(map_backend(d))
+                if limit is not None and len(backends) >= limit:
+                    break
+        logger.info(f"Found {len(backends)} Backends")
+        return backends
+    except Exception as e:
+        logger.error(f"Error in list_backends tool: {str(e)}")
+        raise e
+
+
+@mcp.tool(
+    name="create_backend",
+    description="Adds a backend to a backend set",
+)
+def create_backend(
+    load_balancer_id: str = Field(..., description="The OCID of the load balancer"),
+    backend_set_name: str = Field(..., description="The name of the backend set"),
+    ip_address: str = Field(..., description="IP address of the backend server"),
+    port: int = Field(..., description="Port of the backend server", ge=1, le=65535),
+    weight: Optional[int] = Field(
+        None, description="Load balancing weight for the backend", ge=1, le=100
+    ),
+    max_connections: Optional[int] = Field(
+        None, description="Maximum simultaneous connections for the backend"
+    ),
+    backup: Optional[bool] = Field(
+        None, description="Whether this backend is a backup"
+    ),
+    drain: Optional[bool] = Field(
+        None, description="Whether the backend is in drain mode"
+    ),
+    offline: Optional[bool] = Field(None, description="Whether the backend is offline"),
+) -> Response:
+    try:
+        client = get_load_balancer_client()
+        details = oci.load_balancer.models.BackendDetails(
+            ip_address=ip_address,
+            port=port,
+            weight=weight,
+            max_connections=max_connections,
+            backup=backup,
+            drain=drain,
+            offline=offline,
+        )
+        response: oci.response.Response = client.create_backend(
+            details, load_balancer_id, backend_set_name
+        )
+        logger.info("Create Backend request accepted")
+        return map_response(response)
+    except Exception as e:
+        logger.error(f"Error in create_backend tool: {str(e)}")
+        raise e
+
+
+@mcp.tool(
+    name="get_backend",
+    description="Gets a backend by name from the given backend set and load balancer",
+)
+def get_backend(
+    load_balancer_id: str = Field(..., description="The OCID of the load balancer"),
+    backend_set_name: str = Field(..., description="The name of the backend set"),
+    backend_name: str = Field(..., description="The name of the backend (IP:port)"),
+) -> Backend:
+    try:
+        client = get_load_balancer_client()
+        response: oci.response.Response = client.get_backend(
+            load_balancer_id, backend_set_name, backend_name
+        )
+        data: oci.load_balancer.models.Backend = response.data
+        logger.info("Found Backend")
+        return map_backend(data)
+    except Exception as e:
+        logger.error(f"Error in get_backend tool: {str(e)}")
+        raise e
+
+
+@mcp.tool(
+    name="update_backend",
+    description="Updates a backend in a backend set",
+)
+def update_backend(
+    load_balancer_id: str = Field(..., description="The OCID of the load balancer"),
+    backend_set_name: str = Field(..., description="The name of the backend set"),
+    backend_name: str = Field(..., description="The name of the backend (IP:port)"),
+    ip_address: Optional[str] = Field(
+        None, description="IP address of the backend server"
+    ),
+    port: Optional[int] = Field(
+        None, description="Port of the backend server", ge=1, le=65535
+    ),
+    weight: Optional[int] = Field(
+        None, description="Load balancing weight for the backend", ge=1, le=100
+    ),
+    max_connections: Optional[int] = Field(
+        None, description="Maximum simultaneous connections for the backend"
+    ),
+    backup: Optional[bool] = Field(
+        None, description="Whether this backend is a backup"
+    ),
+    drain: Optional[bool] = Field(
+        None, description="Whether the backend is in drain mode"
+    ),
+    offline: Optional[bool] = Field(None, description="Whether the backend is offline"),
+) -> Response:
+    try:
+        client = get_load_balancer_client()
+        details = oci.load_balancer.models.UpdateBackendDetails(
+            ip_address=ip_address,
+            port=port,
+            weight=weight,
+            max_connections=max_connections,
+            backup=backup,
+            drain=drain,
+            offline=offline,
+        )
+        response: oci.response.Response = client.update_backend(
+            load_balancer_id, backend_set_name, backend_name, details
+        )
+        logger.info("Update Backend request accepted")
+        return map_response(response)
+    except Exception as e:
+        logger.error(f"Error in update_backend tool: {str(e)}")
+        raise e
+
+
+@mcp.tool(
+    name="delete_backend",
+    description="Deletes a backend from a backend set",
+)
+def delete_backend(
+    load_balancer_id: str = Field(..., description="The OCID of the load balancer"),
+    backend_set_name: str = Field(..., description="The name of the backend set"),
+    backend_name: str = Field(..., description="The name of the backend (IP:port)"),
+) -> Response:
+    try:
+        client = get_load_balancer_client()
+        response: oci.response.Response = client.delete_backend(
+            load_balancer_id, backend_set_name, backend_name
+        )
+        logger.info("Delete Backend request accepted")
+        return map_response(response)
+    except Exception as e:
+        logger.error(f"Error in delete_backend tool: {str(e)}")
+        raise e
+
+
+@mcp.tool(
+    name="list_load_balancer_certificates",
+    description="Lists the certificates from the given load balancer",
+)
+def list_load_balancer_certificates(
+    load_balancer_id: str = Field(..., description="The OCID of the load balancer"),
+    limit: Optional[int] = Field(
+        None,
+        description="The maximum number of certificates to return. If None, all are returned.",
+        ge=1,
+    ),
+) -> list[Certificate]:
+    try:
+        client = get_load_balancer_client()
+        certificates: list[Certificate] = []
+        response: oci.response.Response = None
+        has_next_page = True
+        next_page: str | None = None
+        while has_next_page and (limit is None or len(certificates) < limit):
+            response = client.list_certificates(
+                load_balancer_id=load_balancer_id,
+                page=next_page,
+                limit=limit,
+            )
+            has_next_page = getattr(response, "has_next_page", False)
+            next_page = response.next_page if hasattr(response, "next_page") else None
+            items = getattr(response.data, "items", response.data) or []
+            for d in items:
+                certificates.append(map_certificate(d))
+                if limit is not None and len(certificates) >= limit:
+                    break
+        logger.info(f"Found {len(certificates)} Certificates")
+        return certificates
+    except Exception as e:
+        logger.error(f"Error in list_load_balancer_certificates tool: {str(e)}")
+        raise e
+
+
+@mcp.tool(
+    name="create_load_balancer_certificate",
+    description="Creates a new certificate for HTTPS termination on a load balancer",
+)
+def create_load_balancer_certificate(
+    load_balancer_id: str = Field(..., description="The OCID of the load balancer"),
+    certificate_name: str = Field(
+        ..., description="A friendly name for the certificate"
+    ),
+    ca_certificate: Optional[str] = Field(
+        None,
+        description="CA certificate PEM contents (optional if using certificate bundle)",
+    ),
+    public_certificate: str = Field(..., description="Public certificate PEM contents"),
+    private_key: str = Field(..., description="Private key PEM contents"),
+    passphrase: Optional[str] = Field(
+        None, description="Passphrase for the private key if encrypted"
+    ),
+) -> Response:
+    try:
+        client = get_load_balancer_client()
+        details = oci.load_balancer.models.CertificateDetails(
+            certificate_name=certificate_name,
+            ca_certificate=ca_certificate,
+            public_certificate=public_certificate,
+            private_key=private_key,
+            passphrase=passphrase,
+        )
+        response: oci.response.Response = client.create_certificate(
+            load_balancer_id, details
+        )
+        logger.info("Create Certificate request accepted")
+        return map_response(response)
+    except Exception as e:
+        logger.error(f"Error in create_load_balancer_certificate tool: {str(e)}")
+        raise e
+
+
+@mcp.tool(
+    name="delete_load_balancer_certificate",
+    description="Deletes a certificate from a load balancer",
+)
+def delete_load_balancer_certificate(
+    load_balancer_id: str = Field(..., description="The OCID of the load balancer"),
+    certificate_name: str = Field(
+        ..., description="The name of the certificate to delete"
+    ),
+) -> Response:
+    try:
+        client = get_load_balancer_client()
+        response: oci.response.Response = client.delete_certificate(
+            load_balancer_id, certificate_name
+        )
+        logger.info("Delete Certificate request accepted")
+        return map_response(response)
+    except Exception as e:
+        logger.error(f"Error in delete_load_balancer_certificate tool: {str(e)}")
+        raise e
+
+
+# SSL Cipher Suite tools
+
+
+@mcp.tool(
+    name="list_ssl_cipher_suites",
+    description="Lists the SSL cipher suites from the given load balancer",
+)
+def list_ssl_cipher_suites(
+    load_balancer_id: str = Field(..., description="The OCID of the load balancer"),
+    limit: Optional[int] = Field(
+        None,
+        description="Maximum number of cipher suites to return. If None, all are returned.",
+        ge=1,
+    ),
+) -> list[SSLCipherSuite]:
+    try:
+        client = get_load_balancer_client()
+        cipher_suites: list[SSLCipherSuite] = []
+        response: oci.response.Response = None
+        has_next_page = True
+        next_page: str | None = None
+        while has_next_page and (limit is None or len(cipher_suites) < limit):
+            response = client.list_ssl_cipher_suites(
+                load_balancer_id=load_balancer_id,
+                page=next_page,
+                limit=limit,
+            )
+            has_next_page = getattr(response, "has_next_page", False)
+            next_page = response.next_page if hasattr(response, "next_page") else None
+            items = getattr(response.data, "items", response.data) or []
+            for d in items:
+                cipher_suites.append(map_ssl_cipher_suite(d))
+                if limit is not None and len(cipher_suites) >= limit:
+                    break
+        logger.info(f"Found {len(cipher_suites)} SSL Cipher Suites")
+        return cipher_suites
+    except Exception as e:
+        logger.error(f"Error in list_ssl_cipher_suites tool: {str(e)}")
+        raise e
+
+
+@mcp.tool(
+    name="create_ssl_cipher_suite",
+    description="Creates a new SSL cipher suite for a load balancer",
+)
+def create_ssl_cipher_suite(
+    load_balancer_id: str = Field(..., description="The OCID of the load balancer"),
+    name: str = Field(..., description="Friendly name for the SSL cipher suite"),
+    ciphers: list[str] = Field(..., description="List of cipher names for the suite"),
+) -> Response:
+    try:
+        client = get_load_balancer_client()
+        details = oci.load_balancer.models.SSLCipherSuiteDetails(
+            name=name,
+            ciphers=ciphers,
+        )
+        response: oci.response.Response = client.create_ssl_cipher_suite(
+            load_balancer_id, details
+        )
+        logger.info("Create SSL Cipher Suite request accepted")
+        return map_response(response)
+    except Exception as e:
+        logger.error(f"Error in create_ssl_cipher_suite tool: {str(e)}")
+        raise e
+
+
+@mcp.tool(
+    name="get_ssl_cipher_suite",
+    description="Gets an SSL cipher suite by name from a load balancer",
+)
+def get_ssl_cipher_suite(
+    load_balancer_id: str = Field(..., description="The OCID of the load balancer"),
+    name: str = Field(..., description="Name of the SSL cipher suite to retrieve"),
+) -> SSLCipherSuite:
+    try:
+        client = get_load_balancer_client()
+        response: oci.response.Response = client.get_ssl_cipher_suite(
+            load_balancer_id, name
+        )
+        data: oci.load_balancer.models.SSLCipherSuite = response.data
+        logger.info("Found SSL Cipher Suite")
+        return map_ssl_cipher_suite(data)
+    except Exception as e:
+        logger.error(f"Error in get_ssl_cipher_suite tool: {str(e)}")
+        raise e
+
+
+@mcp.tool(
+    name="update_ssl_cipher_suite",
+    description="Updates an existing SSL cipher suite for a load balancer",
+)
+def update_ssl_cipher_suite(
+    load_balancer_id: str = Field(..., description="The OCID of the load balancer"),
+    name: str = Field(..., description="Name of the SSL cipher suite to update"),
+    ciphers: Optional[list[str]] = Field(
+        None, description="Updated list of cipher names for the suite"
+    ),
+) -> Response:
+    try:
+        client = get_load_balancer_client()
+        details = oci.load_balancer.models.SSLCipherSuiteDetails(
+            ciphers=ciphers,
+        )
+        response: oci.response.Response = client.update_ssl_cipher_suite(
+            details, load_balancer_id, name
+        )
+        logger.info("Update SSL Cipher Suite request accepted")
+        return map_response(response)
+    except Exception as e:
+        logger.error(f"Error in update_ssl_cipher_suite tool: {str(e)}")
+        raise e
+
+
+@mcp.tool(
+    name="delete_ssl_cipher_suite",
+    description="Deletes an SSL cipher suite from a load balancer",
+)
+def delete_ssl_cipher_suite(
+    load_balancer_id: str = Field(..., description="The OCID of the load balancer"),
+    name: str = Field(..., description="Name of the SSL cipher suite to delete"),
+) -> Response:
+    try:
+        client = get_load_balancer_client()
+        response: oci.response.Response = client.delete_ssl_cipher_suite(
+            load_balancer_id, name
+        )
+        logger.info("Delete SSL Cipher Suite request accepted")
+        return map_response(response)
+    except Exception as e:
+        logger.error(f"Error in delete_ssl_cipher_suite tool: {str(e)}")
+        raise e
+
+
+# -------------------------------------------------------------------------
+# Advanced routing and rule tools
+# -------------------------------------------------------------------------
+
+# Hostname tools
+
+
+@mcp.tool(
+    name="list_hostnames",
+    description="Lists the hostnames from the given load balancer",
+)
+def list_hostnames(
+    load_balancer_id: str = Field(..., description="The OCID of the load balancer"),
+    limit: Optional[int] = Field(
+        None,
+        description="Maximum number of hostnames to return. If None, all are returned.",
+        ge=1,
+    ),
+) -> list[Hostname]:
+    try:
+        client = get_load_balancer_client()
+        hostnames: list[Hostname] = []
+        response: oci.response.Response = None
+        has_next_page = True
+        next_page: str | None = None
+
+        while has_next_page and (limit is None or len(hostnames) < limit):
+            kwargs = {
+                "load_balancer_id": load_balancer_id,
+                "page": next_page,
+                "limit": limit,
+            }
+            response = client.list_hostnames(**kwargs)
+            has_next_page = getattr(response, "has_next_page", False)
+            next_page = response.next_page if hasattr(response, "next_page") else None
+            items = getattr(response.data, "items", response.data) or []
+            for d in items:
+                hostnames.append(map_hostname(d))
+                if limit is not None and len(hostnames) >= limit:
+                    break
+
+        logger.info(f"Found {len(hostnames)} Hostnames")
+        return hostnames
+    except Exception as e:
+        logger.error(f"Error in list_hostnames tool: {str(e)}")
+        raise e
+
+
+@mcp.tool(
+    name="create_hostname",
+    description="Creates a new hostname resource for a load balancer",
+)
+def create_hostname(
+    load_balancer_id: str = Field(..., description="The OCID of the load balancer"),
+    name: str = Field(..., description="Unique name for the hostname resource"),
+    hostname: str = Field(..., description="Virtual hostname (e.g., app.example.com)"),
+) -> Response:
+    try:
+        client = get_load_balancer_client()
+        details = oci.load_balancer.models.CreateHostnameDetails(
+            name=name,
+            hostname=hostname,
+        )
+        response: oci.response.Response = client.create_hostname(
+            details, load_balancer_id
+        )
+        logger.info("Create Hostname request accepted")
+        return map_response(response)
+    except Exception as e:
+        logger.error(f"Error in create_hostname tool: {str(e)}")
+        raise e
+
+
+@mcp.tool(
+    name="get_hostname",
+    description="Gets a hostname resource by name from a load balancer",
+)
+def get_hostname(
+    load_balancer_id: str = Field(..., description="The OCID of the load balancer"),
+    name: str = Field(..., description="Name of the hostname resource"),
+) -> Hostname:
+    try:
+        client = get_load_balancer_client()
+        response: oci.response.Response = client.get_hostname(load_balancer_id, name)
+        data = response.data
+        logger.info("Found Hostname")
+        return map_hostname(data)
+    except Exception as e:
+        logger.error(f"Error in get_hostname tool: {str(e)}")
+        raise e
+
+
+@mcp.tool(
+    name="update_hostname",
+    description="Updates an existing hostname resource",
+)
+def update_hostname(
+    load_balancer_id: str = Field(..., description="The OCID of the load balancer"),
+    name: str = Field(..., description="Name of the hostname resource to update"),
+    hostname: Optional[str] = Field(
+        None, description="New virtual hostname (e.g., app.example.com)"
+    ),
+) -> Response:
+    try:
+        client = get_load_balancer_client()
+        details = oci.load_balancer.models.UpdateHostnameDetails(
+            hostname=hostname,
+        )
+        response: oci.response.Response = client.update_hostname(
+            details, load_balancer_id, name
+        )
+        logger.info("Update Hostname request accepted")
+        return map_response(response)
+    except Exception as e:
+        logger.error(f"Error in update_hostname tool: {str(e)}")
+        raise e
+
+
+@mcp.tool(
+    name="delete_hostname",
+    description="Deletes a hostname resource from a load balancer",
+)
+def delete_hostname(
+    load_balancer_id: str = Field(..., description="The OCID of the load balancer"),
+    name: str = Field(..., description="Name of the hostname resource to delete"),
+) -> Response:
+    try:
+        client = get_load_balancer_client()
+        response: oci.response.Response = client.delete_hostname(load_balancer_id, name)
+        logger.info("Delete Hostname request accepted")
+        return map_response(response)
+    except Exception as e:
+        logger.error(f"Error in delete_hostname tool: {str(e)}")
+        raise e
+
+
+# Rule Set tools
+
+
+@mcp.tool(
+    name="list_rule_sets",
+    description="Lists the rule sets from the given load balancer",
+)
+def list_rule_sets(
+    load_balancer_id: str = Field(..., description="The OCID of the load balancer"),
+    limit: Optional[int] = Field(
+        None,
+        description="Maximum number of rule sets to return. If None, all are returned.",
+        ge=1,
+    ),
+) -> list[RuleSet]:
+    try:
+        client = get_load_balancer_client()
+        rule_sets: list[RuleSet] = []
+        response: oci.response.Response = None
+        has_next_page = True
+        next_page: str | None = None
+
+        while has_next_page and (limit is None or len(rule_sets) < limit):
+            kwargs = {
+                "load_balancer_id": load_balancer_id,
+                "page": next_page,
+                "limit": limit,
+            }
+            response = client.list_rule_sets(**kwargs)
+            has_next_page = getattr(response, "has_next_page", False)
+            next_page = response.next_page if hasattr(response, "next_page") else None
+            items = getattr(response.data, "items", response.data) or []
+            for d in items:
+                rule_sets.append(map_rule_set(d))
+                if limit is not None and len(rule_sets) >= limit:
+                    break
+
+        logger.info(f"Found {len(rule_sets)} Rule Sets")
+        return rule_sets
+    except Exception as e:
+        logger.error(f"Error in list_rule_sets tool: {str(e)}")
+        raise e
+
+
+@mcp.tool(
+    name="create_rule_set",
+    description="Creates a new rule set for a load balancer",
+)
+def create_rule_set(
+    load_balancer_id: str = Field(..., description="The OCID of the load balancer"),
+    name: str = Field(..., description="Unique name for the rule set"),
+    items: Optional[list[dict]] = Field(
+        None,
+        description="List of rule definitions (raw dicts) to include in the rule set",
+    ),
+) -> Response:
+    try:
+        client = get_load_balancer_client()
+        details = oci.load_balancer.models.CreateRuleSetDetails(
+            name=name,
+            items=items,
+        )
+        response: oci.response.Response = client.create_rule_set(
+            details, load_balancer_id
+        )
+        logger.info("Create Rule Set request accepted")
+        return map_response(response)
+    except Exception as e:
+        logger.error(f"Error in create_rule_set tool: {str(e)}")
+        raise e
+
+
+@mcp.tool(
+    name="get_rule_set",
+    description="Gets a rule set by name from a load balancer",
+)
+def get_rule_set(
+    load_balancer_id: str = Field(..., description="The OCID of the load balancer"),
+    name: str = Field(..., description="Name of the rule set"),
+) -> RuleSet:
+    try:
+        client = get_load_balancer_client()
+        response: oci.response.Response = client.get_rule_set(load_balancer_id, name)
+        data = response.data
+        logger.info("Found Rule Set")
+        return map_rule_set(data)
+    except Exception as e:
+        logger.error(f"Error in get_rule_set tool: {str(e)}")
+        raise e
+
+
+@mcp.tool(
+    name="update_rule_set",
+    description="Updates an existing rule set",
+)
+def update_rule_set(
+    load_balancer_id: str = Field(..., description="The OCID of the load balancer"),
+    name: str = Field(..., description="Name of the rule set to update"),
+    items: Optional[list[dict]] = Field(
+        None,
+        description="Updated list of rule definitions (raw dicts)",
+    ),
+) -> Response:
+    try:
+        client = get_load_balancer_client()
+        details = oci.load_balancer.models.UpdateRuleSetDetails(
+            items=items,
+        )
+        response: oci.response.Response = client.update_rule_set(
+            details, load_balancer_id, name
+        )
+        logger.info("Update Rule Set request accepted")
+        return map_response(response)
+    except Exception as e:
+        logger.error(f"Error in update_rule_set tool: {str(e)}")
+        raise e
+
+
+@mcp.tool(
+    name="delete_rule_set",
+    description="Deletes a rule set from a load balancer",
+)
+def delete_rule_set(
+    load_balancer_id: str = Field(..., description="The OCID of the load balancer"),
+    name: str = Field(..., description="Name of the rule set to delete"),
+) -> Response:
+    try:
+        client = get_load_balancer_client()
+        response: oci.response.Response = client.delete_rule_set(load_balancer_id, name)
+        logger.info("Delete Rule Set request accepted")
+        return map_response(response)
+    except Exception as e:
+        logger.error(f"Error in delete_rule_set tool: {str(e)}")
+        raise e
+
+
+# Routing Policy tools
+
+
+@mcp.tool(
+    name="list_routing_policies",
+    description="Lists the routing policies from the given load balancer",
+)
+def list_routing_policies(
+    load_balancer_id: str = Field(..., description="The OCID of the load balancer"),
+    limit: Optional[int] = Field(
+        None,
+        description="Maximum number of routing policies to return. If None, all are returned.",
+        ge=1,
+    ),
+) -> list[RoutingPolicy]:
+    try:
+        client = get_load_balancer_client()
+        policies: list[RoutingPolicy] = []
+        response: oci.response.Response = None
+        has_next_page = True
+        next_page: str | None = None
+
+        while has_next_page and (limit is None or len(policies) < limit):
+            kwargs = {
+                "load_balancer_id": load_balancer_id,
+                "page": next_page,
+                "limit": limit,
+            }
+            response = client.list_routing_policies(**kwargs)
+            has_next_page = getattr(response, "has_next_page", False)
+            next_page = response.next_page if hasattr(response, "next_page") else None
+            items = getattr(response.data, "items", response.data) or []
+            for d in items:
+                policies.append(map_routing_policy(d))
+                if limit is not None and len(policies) >= limit:
+                    break
+
+        logger.info(f"Found {len(policies)} Routing Policies")
+        return policies
+    except Exception as e:
+        logger.error(f"Error in list_routing_policies tool: {str(e)}")
+        raise e
+
+
+@mcp.tool(
+    name="create_routing_policy",
+    description="Creates a new routing policy for a load balancer",
+)
+def create_routing_policy(
+    load_balancer_id: str = Field(..., description="The OCID of the load balancer"),
+    name: str = Field(..., description="Unique name for the routing policy"),
+    condition_language_version: Optional[Literal["V1", "UNKNOWN_ENUM_VALUE"]] = Field(
+        None, description="Version of the routing condition language"
+    ),
+    rules: Optional[list[dict]] = Field(
+        None, description="List of routing rule definitions (raw dicts)"
+    ),
+) -> Response:
+    try:
+        client = get_load_balancer_client()
+        details = oci.load_balancer.models.CreateRoutingPolicyDetails(
+            name=name,
+            condition_language_version=condition_language_version,
+            rules=rules,
+        )
+        response: oci.response.Response = client.create_routing_policy(
+            details, load_balancer_id
+        )
+        logger.info("Create Routing Policy request accepted")
+        return map_response(response)
+    except Exception as e:
+        logger.error(f"Error in create_routing_policy tool: {str(e)}")
+        raise e
+
+
+@mcp.tool(
+    name="get_routing_policy",
+    description="Gets a routing policy by name from a load balancer",
+)
+def get_routing_policy(
+    load_balancer_id: str = Field(..., description="The OCID of the load balancer"),
+    name: str = Field(..., description="Name of the routing policy"),
+) -> RoutingPolicy:
+    try:
+        client = get_load_balancer_client()
+        response: oci.response.Response = client.get_routing_policy(
+            load_balancer_id, name
+        )
+        data = response.data
+        logger.info("Found Routing Policy")
+        return map_routing_policy(data)
+    except Exception as e:
+        logger.error(f"Error in get_routing_policy tool: {str(e)}")
+        raise e
+
+
+@mcp.tool(
+    name="update_routing_policy",
+    description="Updates an existing routing policy",
+)
+def update_routing_policy(
+    load_balancer_id: str = Field(..., description="The OCID of the load balancer"),
+    name: str = Field(..., description="Name of the routing policy to update"),
+    condition_language_version: Optional[Literal["V1", "UNKNOWN_ENUM_VALUE"]] = Field(
+        None, description="Version of the routing condition language"
+    ),
+    rules: Optional[list[dict]] = Field(
+        None, description="Updated list of routing rule definitions (raw dicts)"
+    ),
+) -> Response:
+    try:
+        client = get_load_balancer_client()
+        details = oci.load_balancer.models.UpdateRoutingPolicyDetails(
+            condition_language_version=condition_language_version,
+            rules=rules,
+        )
+        response: oci.response.Response = client.update_routing_policy(
+            details, load_balancer_id, name
+        )
+        logger.info("Update Routing Policy request accepted")
+        return map_response(response)
+    except Exception as e:
+        logger.error(f"Error in update_routing_policy tool: {str(e)}")
+        raise e
+
+
+@mcp.tool(
+    name="delete_routing_policy",
+    description="Deletes a routing policy from a load balancer",
+)
+def delete_routing_policy(
+    load_balancer_id: str = Field(..., description="The OCID of the load balancer"),
+    name: str = Field(..., description="Name of the routing policy to delete"),
+) -> Response:
+    try:
+        client = get_load_balancer_client()
+        response: oci.response.Response = client.delete_routing_policy(
+            load_balancer_id, name
+        )
+        logger.info("Delete Routing Policy request accepted")
+        return map_response(response)
+    except Exception as e:
+        logger.error(f"Error in delete_routing_policy tool: {str(e)}")
+        raise e
+
+
+@mcp.tool(
+    name="get_load_balancer_health",
+    description="Get health status of a load balancer",
+)
+def get_load_balancer_health(
+    load_balancer_id: str = Field(..., description="The OCID of the load balancer")
+) -> LoadBalancerHealth:
+    try:
+        client = get_load_balancer_client()
+        response: oci.response.Response = client.get_load_balancer_health(
+            load_balancer_id
+        )
+        data = response.data
+        logger.info("Retrieved Load Balancer health")
+        return map_load_balancer_health(data)
+    except Exception as e:
+        logger.error(f"Error in get_load_balancer_health tool: {str(e)}")
+        raise e
+
+
+@mcp.tool(
+    name="get_backend_set_health",
+    description="Get health status of a backend set within a load balancer",
+)
+def get_backend_set_health(
+    load_balancer_id: str = Field(..., description="The OCID of the load balancer"),
+    backend_set_name: str = Field(..., description="The name of the backend set"),
+) -> BackendSetHealth:
+    try:
+        client = get_load_balancer_client()
+        response: oci.response.Response = client.get_backend_set_health(
+            load_balancer_id, backend_set_name
+        )
+        data = response.data
+        logger.info("Retrieved Backend Set health")
+        return map_backend_set_health(data)
+    except Exception as e:
+        logger.error(f"Error in get_backend_set_health tool: {str(e)}")
+        raise e
+
+
+@mcp.tool(
+    name="get_backend_health",
+    description="Get health status of a specific backend within a backend set",
+)
+def get_backend_health(
+    load_balancer_id: str = Field(..., description="The OCID of the load balancer"),
+    backend_set_name: str = Field(..., description="The name of the backend set"),
+    backend_name: str = Field(..., description="The name of the backend (IP:port)"),
+) -> BackendHealth:
+    try:
+        client = get_load_balancer_client()
+        response: oci.response.Response = client.get_backend_health(
+            load_balancer_id, backend_set_name, backend_name
+        )
+        data = response.data
+        logger.info("Retrieved Backend health")
+        return map_backend_health(data)
+    except Exception as e:
+        logger.error(f"Error in get_backend_health tool: {str(e)}")
+        raise e
+
+
+@mcp.tool(
+    name="list_load_balancer_healths",
+    description="List health summaries for all load balancers in a compartment",
+)
+def list_load_balancer_healths(
+    compartment_id: str = Field(..., description="The OCID of the compartment"),
+    limit: Optional[int] = Field(
+        None,
+        description="Maximum number of health summaries to return. If None, no limit.",
+        ge=1,
+    ),
+) -> list[LoadBalancerHealthSummary]:
+    health_summaries: list[LoadBalancerHealthSummary] = []
+    try:
+        client = get_load_balancer_client()
+        has_next_page = True
+        next_page: str | None = None
+        while has_next_page and (limit is None or len(health_summaries) < limit):
+            kwargs = {
+                "compartment_id": compartment_id,
+                "page": next_page,
+                "limit": limit,
+            }
+            response: oci.response.Response = client.list_load_balancer_healths(
+                **kwargs
+            )
+            has_next_page = getattr(response, "has_next_page", False)
+            next_page = response.next_page if hasattr(response, "next_page") else None
+            items = getattr(response.data, "items", response.data) or []
+            for d in items:
+                health_summaries.append(map_load_balancer_health_summary(d))
+                if limit is not None and len(health_summaries) >= limit:
+                    break
+        logger.info(f"Found {len(health_summaries)} Load Balancer health summaries")
+        return health_summaries
+    except Exception as e:
+        logger.error(f"Error in list_load_balancer_healths tool: {str(e)}")
+        raise e
+
+
+@mcp.tool(
+    name="list_load_balancer_work_requests",
+    description="List work requests for load balancers in a compartment",
+)
+def list_load_balancer_work_requests(
+    compartment_id: str = Field(..., description="The OCID of the compartment"),
+    limit: Optional[int] = Field(
+        None,
+        description="Maximum number of work requests to return. If None, no limit.",
+        ge=1,
+    ),
+) -> list[WorkRequest]:
+    work_requests: list[WorkRequest] = []
+    try:
+        client = get_load_balancer_client()
+        has_next_page = True
+        next_page: str | None = None
+        while has_next_page and (limit is None or len(work_requests) < limit):
+            kwargs = {
+                "compartment_id": compartment_id,
+                "page": next_page,
+                "limit": limit,
+            }
+            response: oci.response.Response = client.list_work_requests(**kwargs)
+            has_next_page = getattr(response, "has_next_page", False)
+            next_page = response.next_page if hasattr(response, "next_page") else None
+            items = getattr(response.data, "items", response.data) or []
+            for d in items:
+                work_requests.append(map_work_request(d))
+                if limit is not None and len(work_requests) >= limit:
+                    break
+        logger.info(f"Found {len(work_requests)} Load Balancer work requests")
+        return work_requests
+    except Exception as e:
+        logger.error(f"Error in list_load_balancer_work_requests tool: {str(e)}")
+        raise e
+
+
+@mcp.tool(
+    name="get_load_balancer_work_request",
+    description="Get details of a specific load balancer work request",
+)
+def get_load_balancer_work_request(
+    work_request_id: str = Field(..., description="The OCID of the work request")
+) -> WorkRequest:
+    try:
+        client = get_load_balancer_client()
+        response: oci.response.Response = client.get_work_request(work_request_id)
+        data = response.data
+        logger.info("Retrieved Load Balancer work request")
+        return map_work_request(data)
+    except Exception as e:
+        logger.error(f"Error in get_load_balancer_work_request tool: {str(e)}")
         raise e
 
 
