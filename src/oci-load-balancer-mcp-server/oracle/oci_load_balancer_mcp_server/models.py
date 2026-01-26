@@ -491,6 +491,110 @@ class RuleSet(BaseModel):
     )
 
 
+# Response (generic oci.response.Response mapping)
+
+
+class Request(BaseModel):
+    method: Optional[str] = Field(None, description="HTTP method")
+    url: Optional[str] = Field(None, description="Request URL")
+    query_params: Optional[Dict[str, Any]] = Field(None, description="Query parameters")
+    header_params: Optional[Dict[str, Any]] = Field(None, description="Request headers")
+    body: Optional[Any] = Field(None, description="Request body")
+    response_type: Optional[str] = Field(None, description="Expected response type")
+    enforce_content_headers: Optional[bool] = Field(
+        None, description="Whether content headers enforced for PUT/POST when absent"
+    )
+
+
+class Response(BaseModel):
+    status: Optional[int] = Field(None, description="HTTP status code")
+    headers: Optional[Dict[str, Any]] = Field(None, description="Response headers")
+    data: Optional[Any] = Field(None, description="Response data (mapped)")
+    request: Optional[Request] = Field(None, description="Original request")
+    next_page: Optional[str] = Field(None, description="opc-next-page header value")
+    request_id: Optional[str] = Field(None, description="opc-request-id header value")
+    has_next_page: Optional[bool] = Field(
+        None, description="Whether pagination continues"
+    )
+
+
+def _map_headers(headers) -> Optional[Dict[str, Any]]:
+    if headers is None:
+        return None
+    try:
+        return dict(headers)
+    except Exception:
+        try:
+            return {k: v for k, v in headers.items()}
+        except Exception:
+            return _oci_to_dict(headers) or None
+
+
+def _map_response_data(data: Any) -> Any:
+    # handle sequence
+    if isinstance(data, (list, tuple)):
+        return [_map_response_data(x) for x in data]
+    # passthrough simple
+    if data is None or isinstance(data, (str, int, float, bool, dict)):
+        return data
+    # map known LB models
+    try:
+        if isinstance(data, oci.load_balancer.models.LoadBalancer):
+            return map_load_balancer(data)  # type: ignore[name-defined]
+        if isinstance(data, oci.load_balancer.models.BackendSet):
+            return map_backend_set(data)  # type: ignore[name-defined]
+        if isinstance(data, oci.load_balancer.models.Certificate):
+            return map_certificate(data)  # type: ignore[name-defined]
+        if isinstance(data, oci.load_balancer.models.SSLCipherSuite):
+            return map_ssl_cipher_suite(data)  # type: ignore[name-defined]
+        if isinstance(data, oci.load_balancer.models.LoadBalancerHealth):
+            return map_load_balancer_health(data)  # type: ignore[name-defined]
+        if isinstance(data, oci.load_balancer.models.BackendSetHealth):
+            return map_backend_set_health(data)  # type: ignore[name-defined]
+        if isinstance(data, oci.load_balancer.models.BackendHealth):
+            return map_backend_health(data)  # type: ignore[name-defined]
+        if isinstance(data, oci.load_balancer.models.WorkRequest):
+            return map_work_request(data)  # type: ignore[name-defined]
+    except Exception:
+        pass
+    # fallback to dict
+    coerced = _oci_to_dict(data)
+    return coerced if coerced is not None else data
+
+
+def map_request(req) -> Optional[Request]:
+    if not req:
+        return None
+    return Request(
+        method=getattr(req, "method", None),
+        url=getattr(req, "url", None),
+        query_params=getattr(req, "query_params", None),
+        header_params=getattr(req, "header_params", None),
+        body=getattr(req, "body", None),
+        response_type=getattr(req, "response_type", None),
+        enforce_content_headers=getattr(req, "enforce_content_headers", None),
+    )
+
+
+def map_response(resp: oci.response.Response) -> Optional[Response]:
+    if resp is None:
+        return None
+    headers = _map_headers(getattr(resp, "headers", None))
+    next_page = getattr(resp, "next_page", None) or (headers or {}).get("opc-next-page")
+    request_id = getattr(resp, "request_id", None) or (headers or {}).get(
+        "opc-request-id"
+    )
+    return Response(
+        status=getattr(resp, "status", None),
+        headers=headers,
+        data=_map_response_data(getattr(resp, "data", None)),
+        request=map_request(getattr(resp, "request", None)),
+        next_page=next_page,
+        request_id=request_id,
+        has_next_page=(next_page is not None),
+    )
+
+
 # Top-level LoadBalancer
 
 
@@ -980,4 +1084,163 @@ def map_load_balancer(obj: oci.load_balancer.models.LoadBalancer) -> LoadBalance
         rule_sets=rule_sets,
         routing_policies=routing_policies,
         ip_mode=getattr(obj, "ip_mode", None),
+    )
+
+
+# Health and Work Request models + mapping
+
+
+class HealthCheckResult(BaseModel):
+    subnet_id: Optional[str] = None
+    source_ip_address: Optional[str] = None
+    timestamp: Optional[datetime] = None
+    health_check_status: Optional[
+        Literal[
+            "OK",
+            "INVALID_STATUS_CODE",
+            "TIMED_OUT",
+            "REGEX_MISMATCH",
+            "CONNECT_FAILED",
+            "IO_ERROR",
+            "OFFLINE",
+            "UNKNOWN",
+        ]
+    ] = None
+
+
+class BackendHealth(BaseModel):
+    status: Optional[Literal["OK", "WARNING", "CRITICAL", "UNKNOWN"]] = None
+    health_check_results: Optional[List[HealthCheckResult]] = None
+
+
+class BackendSetHealth(BaseModel):
+    status: Optional[Literal["OK", "WARNING", "CRITICAL", "UNKNOWN"]] = None
+    warning_state_backend_names: Optional[List[str]] = None
+    critical_state_backend_names: Optional[List[str]] = None
+    unknown_state_backend_names: Optional[List[str]] = None
+    total_backend_count: Optional[int] = None
+
+
+class LoadBalancerHealth(BaseModel):
+    status: Optional[Literal["OK", "WARNING", "CRITICAL", "UNKNOWN"]] = None
+    warning_state_backend_set_names: Optional[List[str]] = None
+    critical_state_backend_set_names: Optional[List[str]] = None
+    unknown_state_backend_set_names: Optional[List[str]] = None
+    total_backend_set_count: Optional[int] = None
+
+
+class LoadBalancerHealthSummary(BaseModel):
+    load_balancer_id: Optional[str] = None
+    status: Optional[Literal["OK", "WARNING", "CRITICAL", "UNKNOWN"]] = None
+
+
+class WorkRequestError(BaseModel):
+    error_code: Optional[Literal["BAD_INPUT", "INTERNAL_ERROR"]] = None
+    message: Optional[str] = None
+
+
+class WorkRequest(BaseModel):
+    id: Optional[str] = None
+    load_balancer_id: Optional[str] = None
+    type: Optional[str] = None
+    compartment_id: Optional[str] = None
+    lifecycle_state: Optional[
+        Literal["ACCEPTED", "IN_PROGRESS", "FAILED", "SUCCEEDED"]
+    ] = None
+    message: Optional[str] = None
+    time_accepted: Optional[datetime] = None
+    time_finished: Optional[datetime] = None
+    error_details: Optional[List[WorkRequestError]] = None
+
+
+def map_health_check_result(obj) -> Optional[HealthCheckResult]:
+    if not obj:
+        return None
+    return HealthCheckResult(
+        subnet_id=getattr(obj, "subnet_id", None),
+        source_ip_address=getattr(obj, "source_ip_address", None),
+        timestamp=getattr(obj, "timestamp", None),
+        health_check_status=getattr(obj, "health_check_status", None),
+    )
+
+
+def map_backend_health(obj) -> Optional[BackendHealth]:
+    if not obj:
+        return None
+    results = (
+        [map_health_check_result(r) for r in getattr(obj, "health_check_results", [])]
+        if getattr(obj, "health_check_results", None)
+        else None
+    )
+    return BackendHealth(
+        status=getattr(obj, "status", None), health_check_results=results
+    )
+
+
+def map_backend_set_health(obj) -> Optional[BackendSetHealth]:
+    if not obj:
+        return None
+    return BackendSetHealth(
+        status=getattr(obj, "status", None),
+        warning_state_backend_names=getattr(obj, "warning_state_backend_names", None),
+        critical_state_backend_names=getattr(obj, "critical_state_backend_names", None),
+        unknown_state_backend_names=getattr(obj, "unknown_state_backend_names", None),
+        total_backend_count=getattr(obj, "total_backend_count", None),
+    )
+
+
+def map_load_balancer_health(obj) -> Optional[LoadBalancerHealth]:
+    if not obj:
+        return None
+    return LoadBalancerHealth(
+        status=getattr(obj, "status", None),
+        warning_state_backend_set_names=getattr(
+            obj, "warning_state_backend_set_names", None
+        ),
+        critical_state_backend_set_names=getattr(
+            obj, "critical_state_backend_set_names", None
+        ),
+        unknown_state_backend_set_names=getattr(
+            obj, "unknown_state_backend_set_names", None
+        ),
+        total_backend_set_count=getattr(obj, "total_backend_set_count", None),
+    )
+
+
+def map_load_balancer_health_summary(obj) -> Optional[LoadBalancerHealthSummary]:
+    if not obj:
+        return None
+    return LoadBalancerHealthSummary(
+        load_balancer_id=getattr(obj, "load_balancer_id", None),
+        status=getattr(obj, "status", None),
+    )
+
+
+def map_work_request_error(obj) -> Optional[WorkRequestError]:
+    if not obj:
+        return None
+    return WorkRequestError(
+        error_code=getattr(obj, "error_code", None),
+        message=getattr(obj, "message", None),
+    )
+
+
+def map_work_request(obj) -> Optional[WorkRequest]:
+    if not obj:
+        return None
+    errors = (
+        [map_work_request_error(e) for e in getattr(obj, "error_details", [])]
+        if getattr(obj, "error_details", None)
+        else None
+    )
+    return WorkRequest(
+        id=getattr(obj, "id", None),
+        load_balancer_id=getattr(obj, "load_balancer_id", None),
+        type=getattr(obj, "type", None),
+        compartment_id=getattr(obj, "compartment_id", None),
+        lifecycle_state=getattr(obj, "lifecycle_state", None),
+        message=getattr(obj, "message", None),
+        time_accepted=getattr(obj, "time_accepted", None),
+        time_finished=getattr(obj, "time_finished", None),
+        error_details=errors,
     )
