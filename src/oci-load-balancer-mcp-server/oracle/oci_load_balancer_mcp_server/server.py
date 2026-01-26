@@ -116,9 +116,10 @@ def list_load_balancers(
     try:
         client = get_load_balancer_client()
 
-        response = None
         next_page: Optional[str] = None
-        while True:
+        first_page = True
+        while first_page or (next_page and (limit is None or len(lbs) < limit)):
+            first_page = False
             response = client.list_load_balancers(
                 compartment_id,
                 limit=limit,
@@ -129,13 +130,11 @@ def list_load_balancers(
                 sort_order=sort_order,
             )
             items = getattr(response.data, "items", response.data) or []
-            for d in items:
+            remaining = None if limit is None else max(0, limit - len(lbs))
+            to_process = items if remaining is None else items[:remaining]
+            for d in to_process:
                 lbs.append(map_load_balancer(d))
-                if limit is not None and len(lbs) >= limit:
-                    break
             next_page = getattr(response, "next_page", None)
-            if not next_page or (limit is not None and len(lbs) >= limit):
-                break
 
         logger.info(f"Found {len(lbs)} Load Balancers")
         return lbs
@@ -907,32 +906,18 @@ def create_load_balancer_backend_set(
     try:
         client = get_load_balancer_client()
 
-        # Health checker details
-        health_checker = None
-        if any(
-            x is not None
-            for x in [
-                health_checker_url_path,
-                health_checker_port,
-                health_checker_return_code,
-                health_checker_retries,
-                health_checker_timeout_in_millis,
-                health_checker_interval_in_millis,
-                health_checker_response_body_regex,
-                health_checker_is_force_plain_text,
-            ]
-        ):
-            health_checker = oci.load_balancer.models.HealthCheckerDetails(
-                protocol=health_checker_protocol,
-                url_path=health_checker_url_path,
-                port=health_checker_port,
-                return_code=health_checker_return_code,
-                retries=health_checker_retries,
-                timeout_in_millis=health_checker_timeout_in_millis,
-                interval_in_millis=health_checker_interval_in_millis,
-                response_body_regex=health_checker_response_body_regex,
-                is_force_plain_text=health_checker_is_force_plain_text,
-            )
+        # Health checker details (protocol is required; always build)
+        health_checker = oci.load_balancer.models.HealthCheckerDetails(
+            protocol=health_checker_protocol,
+            url_path=health_checker_url_path,
+            port=health_checker_port,
+            return_code=health_checker_return_code,
+            retries=health_checker_retries,
+            timeout_in_millis=health_checker_timeout_in_millis,
+            interval_in_millis=health_checker_interval_in_millis,
+            response_body_regex=health_checker_response_body_regex,
+            is_force_plain_text=health_checker_is_force_plain_text,
+        )
 
         # SSL configuration
         ssl_cfg = None
@@ -1163,32 +1148,107 @@ def update_load_balancer_backend_set(
     try:
         client = get_load_balancer_client()
 
-        # Health checker details
-        health_checker = None
-        if any(
-            x is not None
-            for x in [
-                health_checker_url_path,
-                health_checker_port,
-                health_checker_return_code,
-                health_checker_retries,
-                health_checker_timeout_in_millis,
-                health_checker_interval_in_millis,
-                health_checker_response_body_regex,
-                health_checker_is_force_plain_text,
+        # Build health checker details. If not all fields provided, preserve current values.
+        current_bs = None
+        need_current = (
+            health_checker_protocol is None
+            and health_checker_url_path is None
+            and health_checker_port is None
+            and health_checker_return_code is None
+            and health_checker_retries is None
+            and health_checker_timeout_in_millis is None
+            and health_checker_interval_in_millis is None
+            and health_checker_response_body_regex is None
+            and health_checker_is_force_plain_text is None
+        ) or (policy is None or backends is None)
+        if need_current:
+            current_bs = client.get_backend_set(load_balancer_id, name).data
+
+        # Determine policy value (preserve existing if not provided)
+        effective_policy = (
+            policy if policy is not None else getattr(current_bs, "policy", None)
+        )
+
+        # Backend details conversion (preserve existing if not provided)
+        if backends is not None:
+            backend_details = [
+                oci.load_balancer.models.BackendDetails(
+                    ip_address=b.ip_address,
+                    port=b.port,
+                    weight=b.weight,
+                    max_connections=b.max_connections,
+                    backup=b.backup,
+                    drain=b.drain,
+                    offline=b.offline,
+                )
+                for b in backends
             ]
-        ):
-            health_checker = oci.load_balancer.models.HealthCheckerDetails(
-                protocol=health_checker_protocol,
-                url_path=health_checker_url_path,
-                port=health_checker_port,
-                return_code=health_checker_return_code,
-                retries=health_checker_retries,
-                timeout_in_millis=health_checker_timeout_in_millis,
-                interval_in_millis=health_checker_interval_in_millis,
-                response_body_regex=health_checker_response_body_regex,
-                is_force_plain_text=health_checker_is_force_plain_text,
+        else:
+            existing_backends = (
+                (getattr(current_bs, "backends", []) or []) if current_bs else []
             )
+            backend_details = [
+                oci.load_balancer.models.BackendDetails(
+                    ip_address=b.ip_address,
+                    port=b.port,
+                    weight=b.weight,
+                    max_connections=b.max_connections,
+                    backup=b.backup,
+                    drain=b.drain,
+                    offline=b.offline,
+                )
+                for b in existing_backends
+            ]
+
+        # Health checker fields (preserve existing where not provided)
+        if current_bs:
+            existing_hc = getattr(current_bs, "health_checker", None)
+        else:
+            existing_hc = None
+        health_checker = oci.load_balancer.models.HealthCheckerDetails(
+            protocol=health_checker_protocol
+            or (existing_hc.protocol if existing_hc else None),
+            url_path=(
+                health_checker_url_path
+                if health_checker_url_path is not None
+                else (existing_hc.url_path if existing_hc else None)
+            ),
+            port=(
+                health_checker_port
+                if health_checker_port is not None
+                else (existing_hc.port if existing_hc else None)
+            ),
+            return_code=(
+                health_checker_return_code
+                if health_checker_return_code is not None
+                else (existing_hc.return_code if existing_hc else None)
+            ),
+            retries=(
+                health_checker_retries
+                if health_checker_retries is not None
+                else (existing_hc.retries if existing_hc else None)
+            ),
+            timeout_in_millis=(
+                health_checker_timeout_in_millis
+                if health_checker_timeout_in_millis is not None
+                else (existing_hc.timeout_in_millis if existing_hc else None)
+            ),
+            interval_in_millis=(
+                health_checker_interval_in_millis
+                if health_checker_interval_in_millis is not None
+                else (existing_hc.interval_in_millis if existing_hc else None)
+            ),
+            response_body_regex=(
+                health_checker_response_body_regex
+                if health_checker_response_body_regex is not None
+                else (existing_hc.response_body_regex if existing_hc else None)
+            ),
+            is_force_plain_text=(
+                health_checker_is_force_plain_text
+                if health_checker_is_force_plain_text is not None
+                else (existing_hc.is_force_plain_text if existing_hc else None)
+            ),
+        )
 
         # SSL configuration
         ssl_cfg = None
@@ -1260,24 +1320,8 @@ def update_load_balancer_backend_set(
                 )
             )
 
-        # Backend details conversion
-        backend_details = None
-        if backends is not None:
-            backend_details = [
-                oci.load_balancer.models.BackendDetails(
-                    ip_address=b.ip_address,
-                    port=b.port,
-                    weight=b.weight,
-                    max_connections=b.max_connections,
-                    backup=b.backup,
-                    drain=b.drain,
-                    offline=b.offline,
-                )
-                for b in backends
-            ]
-
         details = oci.load_balancer.models.UpdateBackendSetDetails(
-            policy=policy,
+            policy=effective_policy,
             backends=backend_details,
             backend_max_connections=backend_max_connections,
             health_checker=health_checker,
@@ -1965,21 +2009,20 @@ def list_routing_policies(
     try:
         client = get_load_balancer_client()
         policies: list[RoutingPolicy] = []
-        response: oci.response.Response = None
         next_page: Optional[str] = None
+        first_page = True
 
-        while True:
+        while first_page or (next_page and (limit is None or len(policies) < limit)):
+            first_page = False
             response = client.list_routing_policies(
                 load_balancer_id, limit=limit, page=next_page
             )
             items = getattr(response.data, "items", response.data) or []
-            for d in items:
+            remaining = None if limit is None else max(0, limit - len(policies))
+            to_process = items if remaining is None else items[:remaining]
+            for d in to_process:
                 policies.append(map_routing_policy(d))
-                if limit is not None and len(policies) >= limit:
-                    break
             next_page = getattr(response, "next_page", None)
-            if not next_page or (limit is not None and len(policies) >= limit):
-                break
 
         logger.info(f"Found {len(policies)} Routing Policies")
         return policies
@@ -2169,18 +2212,20 @@ def list_load_balancer_healths(
     try:
         client = get_load_balancer_client()
         next_page: Optional[str] = None
-        while True:
+        first_page = True
+        while first_page or (
+            next_page and (limit is None or len(health_summaries) < limit)
+        ):
+            first_page = False
             response: oci.response.Response = client.list_load_balancer_healths(
                 compartment_id, limit=limit, page=next_page
             )
             items = getattr(response.data, "items", response.data) or []
-            for d in items:
+            remaining = None if limit is None else max(0, limit - len(health_summaries))
+            to_process = items if remaining is None else items[:remaining]
+            for d in to_process:
                 health_summaries.append(map_load_balancer_health_summary(d))
-                if limit is not None and len(health_summaries) >= limit:
-                    break
             next_page = getattr(response, "next_page", None)
-            if not next_page or (limit is not None and len(health_summaries) >= limit):
-                break
         logger.info(f"Found {len(health_summaries)} Load Balancer health summaries")
         return health_summaries
     except Exception as e:
@@ -2204,18 +2249,20 @@ def list_load_balancer_work_requests(
     try:
         client = get_load_balancer_client()
         next_page: Optional[str] = None
-        while True:
+        first_page = True
+        while first_page or (
+            next_page and (limit is None or len(work_requests) < limit)
+        ):
+            first_page = False
             response: oci.response.Response = client.list_work_requests(
                 load_balancer_id, limit=limit, page=next_page
             )
             items = getattr(response.data, "items", response.data) or []
-            for d in items:
+            remaining = None if limit is None else max(0, limit - len(work_requests))
+            to_process = items if remaining is None else items[:remaining]
+            for d in to_process:
                 work_requests.append(map_work_request(d))
-                if limit is not None and len(work_requests) >= limit:
-                    break
             next_page = getattr(response, "next_page", None)
-            if not next_page or (limit is not None and len(work_requests) >= limit):
-                break
         logger.info(f"Found {len(work_requests)} Load Balancer work requests")
         return work_requests
     except Exception as e:
