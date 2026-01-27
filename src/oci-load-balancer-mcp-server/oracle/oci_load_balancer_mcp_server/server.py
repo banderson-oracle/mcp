@@ -120,9 +120,11 @@ def list_load_balancers(
         first_page = True
         while first_page or (next_page and (limit is None or len(lbs) < limit)):
             first_page = False
+            # Respect remaining client-side limit to avoid overfetching
+            page_limit = None if limit is None else max(1, limit - len(lbs))
             response = client.list_load_balancers(
                 compartment_id,
-                limit=limit,
+                limit=page_limit,
                 page=next_page,
                 display_name=display_name,
                 lifecycle_state=lifecycle_state,
@@ -1148,21 +1150,8 @@ def update_load_balancer_backend_set(
     try:
         client = get_load_balancer_client()
 
-        # Build health checker details. If not all fields provided, preserve current values.
-        current_bs = None
-        need_current = (
-            health_checker_protocol is None
-            and health_checker_url_path is None
-            and health_checker_port is None
-            and health_checker_return_code is None
-            and health_checker_retries is None
-            and health_checker_timeout_in_millis is None
-            and health_checker_interval_in_millis is None
-            and health_checker_response_body_regex is None
-            and health_checker_is_force_plain_text is None
-        ) or (policy is None or backends is None)
-        if need_current:
-            current_bs = client.get_backend_set(load_balancer_id, name).data
+        # Always fetch current backend set so we can safely preserve unspecified fields
+        current_bs = client.get_backend_set(load_balancer_id, name).data
 
         # Determine policy value (preserve existing if not provided)
         effective_policy = (
@@ -1471,12 +1460,6 @@ def update_backend(
     load_balancer_id: str = Field(..., description="The OCID of the load balancer"),
     backend_set_name: str = Field(..., description="The name of the backend set"),
     backend_name: str = Field(..., description="The name of the backend (IP:port)"),
-    ip_address: Optional[str] = Field(
-        None, description="IP address of the backend server"
-    ),
-    port: Optional[int] = Field(
-        None, description="Port of the backend server", ge=1, le=65535
-    ),
     weight: Optional[int] = Field(
         None, description="Load balancing weight for the backend", ge=1, le=100
     ),
@@ -2014,8 +1997,9 @@ def list_routing_policies(
 
         while first_page or (next_page and (limit is None or len(policies) < limit)):
             first_page = False
+            page_limit = None if limit is None else max(1, limit - len(policies))
             response = client.list_routing_policies(
-                load_balancer_id, limit=limit, page=next_page
+                load_balancer_id, limit=page_limit, page=next_page
             )
             items = getattr(response.data, "items", response.data) or []
             remaining = None if limit is None else max(0, limit - len(policies))
@@ -2217,8 +2201,11 @@ def list_load_balancer_healths(
             next_page and (limit is None or len(health_summaries) < limit)
         ):
             first_page = False
+            page_limit = (
+                None if limit is None else max(1, limit - len(health_summaries))
+            )
             response: oci.response.Response = client.list_load_balancer_healths(
-                compartment_id, limit=limit, page=next_page
+                compartment_id, limit=page_limit, page=next_page
             )
             items = getattr(response.data, "items", response.data) or []
             remaining = None if limit is None else max(0, limit - len(health_summaries))
@@ -2254,8 +2241,9 @@ def list_load_balancer_work_requests(
             next_page and (limit is None or len(work_requests) < limit)
         ):
             first_page = False
+            page_limit = None if limit is None else max(1, limit - len(work_requests))
             response: oci.response.Response = client.list_work_requests(
-                load_balancer_id, limit=limit, page=next_page
+                load_balancer_id, limit=page_limit, page=next_page
             )
             items = getattr(response.data, "items", response.data) or []
             remaining = None if limit is None else max(0, limit - len(work_requests))
